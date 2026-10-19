@@ -1,0 +1,335 @@
+"""Modal screens.
+
+Adding a source is a short wizard: one decision per step, and each step is
+derived from the plugin's declaration, so new plugins get it for free.
+
+    type ──► found (only if the plugin can detect) ──► watch ──► Add
+                  └──► manual (nothing found, or "Enter manually…") ──┘
+"""
+
+from __future__ import annotations
+
+import asyncio
+
+from rich.text import Text
+from textual.app import ComposeResult
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen
+from textual.widgets import Button, Collapsible, Input, Label, OptionList, SelectionList, Static
+from textual.widgets.option_list import Option
+from textual.widgets.selection_list import Selection
+
+from fly_monitor.core.config import parse_interval
+from fly_monitor.core.engine import Core, DetectedSource, PluginInfo
+
+DIALOG_CSS = """
+#dialog {
+    width: 72;
+    height: auto;
+    max-height: 90%;
+    border: thick $accent;
+    background: $surface;
+    padding: 1 2;
+}
+#dialog #title { text-style: bold; margin-bottom: 1; }
+#dialog #body { height: auto; }
+#dialog .field { margin-top: 1; text-style: bold; }
+#dialog .help { color: $text-muted; }
+#dialog OptionList, #dialog SelectionList { height: auto; max-height: 12; }
+#dialog Collapsible { margin-top: 1; }
+#dialog .rule { height: auto; }
+#dialog .rule Input { width: 8; }
+#dialog .rule Static { width: auto; padding: 1 1 0 1; }
+#dialog #result { margin-top: 1; height: auto; }
+#dialog #buttons { height: auto; margin-top: 1; }
+#dialog Button { margin-right: 1; }
+"""
+
+
+class AddSourceScreen(ModalScreen[list[str]]):
+    """Returns the ids of the sources added (empty if cancelled)."""
+
+    DEFAULT_CSS = "AddSourceScreen { align: center middle; }\n" + DIALOG_CSS
+    BINDINGS = [("escape", "back", "Back")]
+
+    def __init__(self, core: Core) -> None:
+        super().__init__()
+        self.core = core
+        self.plugins = {p.name: p for p in core.list_plugins()}
+        self.plugin: PluginInfo | None = None
+        self.step = ""
+        self._history: list[str] = []
+        self._detected: list[DetectedSource] = []
+        self._chosen: list[DetectedSource] = []  # from the "found" step
+        self._manual: dict[str, str] | None = None  # from the "manual" step
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="dialog"):
+            yield Static("", id="title")
+            yield Vertical(id="body")
+            yield Static("", id="result")
+            yield Horizontal(id="buttons")
+
+    async def on_mount(self) -> None:
+        await self._go("type", remember=False)
+
+    # -- navigation -------------------------------------------------------------
+
+    async def _go(self, step: str, *, remember: bool = True, note: str = "") -> None:
+        if remember and self.step:
+            self._history.append(self.step)
+        self.step = step
+        body, buttons = self.query_one("#body", Vertical), self.query_one("#buttons", Horizontal)
+        await body.remove_children()
+        await buttons.remove_children()
+        self.query_one("#result", Static).update(Text(note, style="dim") if note else "")
+        await getattr(self, f"_step_{step}")(body, buttons)
+
+    async def action_back(self) -> None:
+        if not self._history:
+            self.dismiss([])
+            return
+        self.step = ""  # don't push the step we're leaving
+        await self._go(self._history.pop(), remember=False)
+
+    # -- steps ------------------------------------------------------------------
+
+    async def _step_type(self, body: Vertical, buttons: Horizontal) -> None:
+        self._title("What do you want to monitor?")
+        options = OptionList(*(Option(name, id=name) for name in self.plugins), id="types")
+        await body.mount(options)
+        options.focus()
+
+    async def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option_list.id != "types":
+            return
+        self.plugin = self.plugins[event.option.id]
+        self._chosen, self._manual = [], None
+        if self.plugin.can_detect:
+            await self._go("found")
+        elif self._identity_settings():
+            await self._go("manual")
+        else:
+            await self._go("watch")
+
+    async def _step_found(self, body: Vertical, buttons: Horizontal) -> None:
+        self._title("Found on this machine")
+        await body.mount(Static("Looking…", classes="help"))
+        self.run_worker(self._detect(), group="detect", exclusive=True)
+
+    async def _detect(self) -> None:
+        assert self.plugin is not None
+        try:
+            found = await asyncio.to_thread(self.core.detect_sources, self.plugin.name)
+        except Exception as exc:
+            await self._go("manual", remember=False, note=f"Detection failed ({exc}). Enter the details instead.")
+            return
+        if self.step != "found":
+            return  # user went back meanwhile
+        if not found:
+            await self._go("manual", remember=False, note="Nothing found on this machine. Enter the details instead.")
+            return
+        self._detected = list(found)
+        body, buttons = self.query_one("#body", Vertical), self.query_one("#buttons", Horizontal)
+        await body.remove_children()
+        selections = []
+        for n, candidate in enumerate(found):
+            label = Text(candidate.name)
+            if candidate.existing_id:
+                label.append("  already added", style="dim")
+            elif candidate.description:
+                label.append(f"  {candidate.description}", style="dim")
+            selections.append(Selection(label, n, False, disabled=bool(candidate.existing_id)))
+        accounts = SelectionList(*selections, id="accounts")
+        await body.mount(accounts)
+        await buttons.mount_all([Button("Next", id="next-found", variant="primary"), Button("Enter manually…", id="manual")])
+        accounts.focus()
+
+    async def _step_manual(self, body: Vertical, buttons: Horizontal) -> None:
+        self._title("Enter the details")
+        widgets: list = []
+        for setting in self._identity_settings():
+            widgets.append(Label(f"{setting.label}{' *' if setting.required else ''}", classes="field"))
+            widgets.append(Input(id=f"setting-{setting.key}", password=setting.secret, placeholder=setting.default or ""))
+            if setting.help:
+                widgets.append(Static(setting.help, classes="help"))
+        await body.mount_all(widgets)
+        assert self.plugin is not None
+        actions = [Button("Next", id="next-manual", variant="primary")]
+        if self.plugin.can_test:
+            actions.append(Button("Test", id="test"))
+        await buttons.mount_all(actions)
+        if widgets:
+            self.query(Input).first().focus()
+
+    async def _step_watch(self, body: Vertical, buttons: Horizontal) -> None:
+        assert self.plugin is not None
+        choice_settings = [s for s in self.plugin.settings if s.choices]
+        rule = self.plugin.default_rule
+        self._title("What to watch?" if choice_settings else "When is it failing?" if rule else "Almost done")
+        widgets: list = []
+        if rule:
+            widgets += [
+                Label("Failing when", classes="field"),
+                Horizontal(
+                    Input(str(rule.fail_after), id="rule-fail", type="integer"),
+                    Static("of the last"),
+                    Input(str(rule.window), id="rule-window", type="integer"),
+                    Static("checks fail"),
+                    classes="rule",
+                ),
+                Label("Recovered after", classes="field"),
+                Horizontal(
+                    Input(str(rule.recover_after), id="rule-recover", type="integer"),
+                    Static("good checks in a row"),
+                    classes="rule",
+                ),
+            ]
+        for setting in choice_settings:
+            if len(choice_settings) > 1:
+                widgets.append(Label(setting.label, classes="field"))
+            widgets.append(
+                SelectionList(*((c.label, c.value, c.default) for c in setting.choices), id=f"setting-{setting.key}")
+            )
+        widgets.append(
+            Collapsible(
+                Label("Sync interval", classes="field"),
+                Input(id="interval", placeholder=f"{_duration(self.plugin.default_interval)}   (seconds, or e.g. 30m, 1h)"),
+                Label("Tags", classes="field"),
+                Input(id="tags", placeholder="comma separated, e.g. work, personal"),
+                title="More options",
+                collapsed=True,
+            )
+        )
+        await body.mount_all(widgets)
+        count = len(self._chosen) or 1
+        await buttons.mount(Button(f"Add {count} source{'s' * (count != 1)}" if count > 1 else "Add", id="add", variant="primary"))
+        if choice_settings:
+            self.query(SelectionList).first().focus()
+        elif rule:
+            self.query_one("#add", Button).focus()
+
+    # -- buttons ----------------------------------------------------------------
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        match event.button.id:
+            case "manual":
+                await self._go("manual")
+            case "next-found":
+                ticked = self.query_one("#accounts", SelectionList).selected
+                if not ticked:
+                    self._error("Tick at least one account.")
+                    return
+                self._chosen, self._manual = [self._detected[n] for n in ticked], None
+                await self._go("watch")
+            case "next-manual":
+                values = self._manual_values()
+                missing = [s.label for s in self._identity_settings() if s.required and not values.get(s.key)]
+                if missing:
+                    self._error(f"missing: {', '.join(missing)}")
+                    return
+                self._chosen, self._manual = [], values
+                await self._go("watch")
+            case "test":
+                await self._test()
+            case "add":
+                self._add()
+
+    async def _test(self) -> None:
+        assert self.plugin is not None
+        self.query_one("#result", Static).update(Text("Testing…", style="italic"))
+        try:
+            message = await asyncio.to_thread(self.core.test_settings, self.plugin.name, self._manual_values())
+        except Exception as exc:
+            self._error(str(exc) or type(exc).__name__)
+        else:
+            self.query_one("#result", Static).update(Text(f"✓ {message}", style="green"))
+
+    def _add(self) -> None:
+        assert self.plugin is not None
+        try:
+            raw = self.query_one("#interval", Input).value.strip()
+            interval = parse_interval(raw) if raw else self.plugin.default_interval
+            rule = None
+            if self.plugin.default_rule:
+                rule = {
+                    "fail_after": int(self.query_one("#rule-fail", Input).value),
+                    "window": int(self.query_one("#rule-window", Input).value),
+                    "recover_after": int(self.query_one("#rule-recover", Input).value),
+                }
+        except ValueError as exc:
+            self._error(str(exc) if "interval" in str(exc) else "rule numbers must be whole numbers")
+            return
+        tags = tuple(t.strip() for t in self.query_one("#tags", Input).value.split(",") if t.strip())
+        choices = {
+            s.key: list(self.query_one(f"#setting-{s.key}", SelectionList).selected)
+            for s in self.plugin.settings
+            if s.choices
+        }
+        if self._manual is not None:
+            targets = [(self._manual_name(), {**self._manual, **choices})]
+        elif self._chosen:
+            targets = [(c.name, {**c.settings, **choices}) for c in self._chosen]
+        else:
+            targets = [(self.plugin.name, choices)]  # plugin needs no identity at all
+
+        added: list[str] = []
+        for name, settings in targets:
+            try:
+                added.append(
+                    self.core.add_source(self.plugin.name, name, settings, interval=interval, tags=tags, rule=rule)
+                )
+            except ValueError as exc:
+                if added:
+                    self.notify(f"Added {', '.join(added)} before the error", severity="warning")
+                self._error(f"{name}: {exc}")
+                return
+        self.dismiss(added)
+
+    # -- helpers ----------------------------------------------------------------
+
+    def _identity_settings(self):
+        return [s for s in self.plugin.settings if not s.choices] if self.plugin else []
+
+    def _manual_values(self) -> dict[str, str]:
+        return {s.key: self.query_one(f"#setting-{s.key}", Input).value.strip() for s in self._identity_settings()}
+
+    def _manual_name(self) -> str:
+        assert self.plugin is not None and self._manual is not None
+        first = next((self._manual.get(s.key) for s in self._identity_settings() if not s.secret), None)
+        return first or self.plugin.name
+
+    def _title(self, text: str) -> None:
+        self.query_one("#title", Static).update(Text(text))
+
+    def _error(self, message: str) -> None:
+        self.query_one("#result", Static).update(Text(f"✗ {message}", style="bold red"))
+
+
+def _duration(seconds: int) -> str:
+    for unit, size in (("h", 3600), ("m", 60)):
+        if seconds % size == 0:
+            return f"{seconds // size}{unit}"
+    return f"{seconds}s"
+
+
+class ConfirmScreen(ModalScreen[bool]):
+    DEFAULT_CSS = "ConfirmScreen { align: center middle; }\n" + DIALOG_CSS.replace("width: 72", "width: 60")
+    BINDINGS = [("y", "answer(True)", "Yes"), ("n", "answer(False)", "No"), ("escape", "answer(False)", "No")]
+
+    def __init__(self, question: str) -> None:
+        super().__init__()
+        self.question = question
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Static(Text(self.question))
+            with Horizontal(id="buttons"):
+                yield Button("Delete (y)", id="yes", variant="error")
+                yield Button("Keep (n)", id="no")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "yes")
+
+    def action_answer(self, value: bool) -> None:
+        self.dismiss(value)

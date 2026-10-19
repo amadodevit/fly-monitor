@@ -1,0 +1,30 @@
+[
+  {
+    "reason": "comment",
+    "updated_at": "2026-10-16T10:00:00Z",
+    "subject": {
+      "title": "Widgets break on Tuesdays",
+      "type": "Issue",
+      "url": "https://api.github.com/repos/acme/widgets/issues/9",
+      "latest_comment_url": "https://api.github.com/repos/acme/widgets/issues/comments/555"
+    },
+    "repository": {"full_name": "acme/widgets", "html_url": "https://github.com/acme/widgets"}
+  },
+  {
+    "reason": "mention",
+    "updated_at": "2026-10-16T11:00:00Z",
+    "subject": {
+      "title": "Fix the wobbly widget",
+      "type": "PullRequest",
+      "url": "https://api.github.com/repos/acme/widgets/pulls/42",
+      "latest_comment_url": null
+    },
+    "repository": {"full_name": "acme/widgets", "html_url": "https://github.com/acme/widgets"}
+  },
+  {
+    "reason": "ci_activity",
+    "updated_at": "2026-10-16T12:00:00Z",
+    "subject": {"title": "CI passed", "type": "CheckSuite", "url": null, "latest_comment_url": null},
+    "repository": {"full_name": "acme/widgets", "html_url": "https://github.com/acme/widgets"}
+  }
+]

@@ -1,0 +1,10 @@
+{"hosts": {
+  "github.com": [
+    {"state": "success", "active": true, "host": "github.com", "login": "octo-work"},
+    {"state": "success", "active": false, "host": "github.com", "login": "octo-home"},
+    {"state": "error", "active": false, "host": "github.com", "login": "octo-expired"}
+  ],
+  "ghe.example.com": [
+    {"state": "success", "active": true, "host": "ghe.example.com", "login": "octo-enterprise"}
+  ]
+}}

@@ -1,0 +1,13 @@
+# Copy to ~/.config/fly-monitor/config.toml
+# One [[source]] block per thing you watch. Each GitHub account is its own source.
+
+[[source]]
+id = "gh-work"            # unique, stable: state on disk is keyed by it
+plugin = "github"
+name = "work account"     # shown as the group header
+interval = "1h"           # seconds, or "30m", "1h". Default 1h.
+tags = ["work"]
+
+[source.settings]
+account = "your-github-login"
+token = "gh:your-github-login"   # read from `gh auth token --user ...`; or "env:VAR"

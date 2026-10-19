@@ -1,0 +1,19 @@
+{
+  "total_count": 2,
+  "items": [
+    {
+      "html_url": "https://github.com/acme/widgets/pull/42",
+      "title": "  Fix the wobbly widget ",
+      "repository_url": "https://api.github.com/repos/acme/widgets",
+      "user": {"login": "alice"},
+      "updated_at": "2026-10-15T16:31:39Z"
+    },
+    {
+      "html_url": "https://github.com/acme/gears/pull/7",
+      "title": "Add gear ratio",
+      "repository_url": "https://api.github.com/repos/acme/gears",
+      "user": {"login": "bob"},
+      "updated_at": "2026-10-14T09:00:00Z"
+    }
+  ]
+}
