@@ -22,3 +22,7 @@ while fly-monitor is open. A source's first sync stays quiet.
 
 Plugins register through the `fly_monitor.sources` entry point group. Their declared
 settings become the add-source form. See `src/fly_monitor/core/plugin.py` for the contract.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
