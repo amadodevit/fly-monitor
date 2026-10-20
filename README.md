@@ -20,8 +20,8 @@ A website is failing when 5 of its last 10 checks failed, and recovers after 3 g
 New GitHub items and websites going failing raise a desktop popup (notify-send) and an in-app toast,
 while fly-monitor is open. A source's first sync stays quiet.
 
-Plugins register through the `fly_monitor.sources` entry point group. Their declared
-settings become the add-source form. See `src/fly_monitor/core/plugin.py` for the contract.
+Want to monitor something else? Write a plugin: see [PLUGINS.md](PLUGINS.md) and the
+example in [`examples/fly-monitor-disk`](examples/fly-monitor-disk).
 
 ## License
 
