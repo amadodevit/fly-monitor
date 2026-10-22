@@ -2,11 +2,12 @@ import asyncio
 
 import pytest
 
+from fly_monitor.core.checks import Check, Condition
 from fly_monitor.core.config import SourceConfig
 from fly_monitor.core.engine import ERROR_RETRY, Core
 from fly_monitor.core.health import Rule
 from fly_monitor.core.models import Item, Sample
-from fly_monitor.core.plugin import Candidate, Choice, Setting
+from fly_monitor.core.plugin import Candidate, Choice, Metric, Setting
 from fly_monitor.core.registry import discover
 from fly_monitor.core.store import Store
 
@@ -263,3 +264,46 @@ def test_secret_reaches_the_plugin_at_sync_and_a_locked_keyring_retries(fake_key
     assert "keyring locked" in core.get_state().sources[0].last_error
     clock.now += ERROR_RETRY
     assert core._is_due("s1")  # retried within 5 minutes, not an hour
+
+
+class QueuePlugin:
+    name = "queues"
+    connection = "http"
+    kind = "samples"
+    default_rule = Rule(window=2, fail_after=2, recover_after=1)
+    metrics = (Metric("size", "Waiting"), Metric("dequeued", "Dequeued", counter=True, short="out"))
+    default_checks = (Check("stuck", "Stuck", (Condition("size", ">", 0), Condition("dequeued", "=", 0))),)
+    settings = ()
+
+    def __init__(self):
+        self.values = {}
+
+    def sync(self, ctx):
+        return [Sample(key="orders", ok=True, summary=f"{self.values['size']} waiting", values=dict(self.values))]
+
+
+def test_core_checks_turn_numbers_into_failing():
+    plugin, clock = QueuePlugin(), Clock()
+    core = Core({"queues": plugin}, Store(":memory:"), clock=clock)
+    sid = core.add_source("queues", "Broker", {})
+    assert core._all[sid].checks[0]["label"] == "Stuck"  # defaults stored with the source
+
+    def sync(size, dequeued):
+        plugin.values = {"size": size, "dequeued": dequeued}
+        clock.now += 60
+        asyncio.run(core.sync_now())
+        return core.get_state().sources[0].health[0]
+
+    first = sync(5, 10)
+    assert first.state == "ok" and first.summary == "5 waiting"  # first sync: no growth known yet
+    row = sync(6, 10)
+    assert row.summary == "6 waiting · +0 out · Stuck" and row.failures == 1
+    assert sync(7, 10).state == "failing"
+    assert sync(0, 17).state == "ok"  # consumer caught up
+
+
+def test_add_source_rejects_checks_on_unknown_metrics():
+    core = Core({"queues": QueuePlugin()}, Store(":memory:"))
+    bad = [{"id": "x", "label": "X", "conditions": [["latency", ">", 1]]}]
+    with pytest.raises(ValueError, match="unknown metric"):
+        core.add_source("queues", "Broker", {}, checks=bad)

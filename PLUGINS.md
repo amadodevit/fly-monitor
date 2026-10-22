@@ -50,6 +50,7 @@ You never write UI. Each `Setting` becomes one field in the add-source wizard.
 | `default` | Prefilled value, also used when the user leaves it empty. |
 | `help` | One line under the field. Put an example here. |
 | `choices` | Turns the field into a checklist. The value is a list of the ticked `Choice.value`s. |
+| `fetch` | Adds a Fetch button. The form calls your `options(ctx, key)` and lets the user tick values (e.g. queue names). |
 
 Values arrive as strings (or a list, for choices). Convert them in `sync`.
 
@@ -68,6 +69,33 @@ You only say whether this one check passed. The core judges it over time with a 
 (by default 5 failed of the last 10, then 3 good in a row to recover), and handles failing,
 acknowledge and close.
 
+### Metrics and checks
+
+If your samples carry numbers, declare them and let users write rules on them.
+You report the numbers; the core decides when they are bad.
+
+```python
+from fly_monitor.core.checks import Check, Condition
+from fly_monitor.core.plugin import Metric
+
+metrics = (
+    Metric("size", "Messages waiting"),
+    Metric("dequeued", "Dequeued", counter=True, short="out"),   # only goes up
+)
+default_checks = (
+    Check("stuck", "Stuck", (Condition("size", ">", 0), Condition("dequeued", "=", 0))),
+)
+```
+
+- A check fires when all its conditions hold. Any firing check makes that sample a bad check.
+- A `counter=True` metric is compared by its growth since the previous sync, not its raw value.
+  On the first sync, or after a reset (the number went down), counter conditions don't fire.
+- The core also adds each counter's growth to the row, e.g. `+1.2k out`, using `short` (or the label).
+- Users see your default checks in the add-source form, can untick them and change the numbers.
+  They double as examples, so make them sensible.
+
+See `src/fly_monitor/plugins/activemq.py` for a complete example.
+
 A failed check is a sample with `ok=False`, not an exception. Raise only when the plugin
 itself cannot run (bad token, unknown host). The core then shows the error on the source.
 
@@ -82,6 +110,8 @@ Add these when they help. The core checks for them with `hasattr`.
 | `identity` | Setting keys that identify a source, e.g. `("account",)`. Marks detected candidates that are already added. |
 | `default_interval` | Seconds between syncs. Default one hour. |
 | `default_rule` | A `Rule(window, fail_after, recover_after)` for samples. Users can change it when adding. |
+| `metrics`, `default_checks` | Samples only: the numbers you report and the editable checks on them. See above. |
+| `options(ctx, key) -> list[str]` | Values to pick from for a `Setting` with `fetch=True`. |
 
 ## Connections and secrets
 

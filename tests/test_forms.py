@@ -1,11 +1,12 @@
 import asyncio
 
 from textual.app import App
-from textual.widgets import Input, OptionList, SelectionList, Static
+from textual.widgets import Checkbox, Input, OptionList, SelectionList, Static
 
+from fly_monitor.core.checks import Check, Condition
 from fly_monitor.core.engine import Core
 from fly_monitor.core.health import Rule
-from fly_monitor.core.plugin import Candidate, Choice, Setting
+from fly_monitor.core.plugin import Candidate, Choice, Metric, Setting
 from fly_monitor.core.store import Store
 from fly_monitor.ui.forms import AddSourceScreen
 
@@ -221,3 +222,52 @@ def test_sample_plugin_wizard_shows_rule_and_uses_plugin_interval():
     source = core._all[sid]
     assert source.interval == 300
     assert source.rule == {"window": 10, "fail_after": 5, "recover_after": 2}
+
+
+class QueuePlugin:
+    """Samples with metrics, editable checks and a fetchable setting."""
+
+    name = "queues"
+    connection = "http"
+    kind = "samples"
+    default_rule = Rule(window=3, fail_after=3, recover_after=1)
+    metrics = (Metric("size", "Waiting"), Metric("dequeued", "Dequeued", counter=True))
+    default_checks = (
+        Check("backlog", "Backlog", (Condition("size", ">", 1000),)),
+        Check("stuck", "Stuck", (Condition("size", ">", 0), Condition("dequeued", "=", 0))),
+    )
+    settings = (Setting("url", "URL"), Setting("queues", "Queues", required=False, default="*", fetch=True))
+
+    def options(self, ctx, key):
+        return ["orders", "billing"]
+
+    def sync(self, ctx):
+        return []
+
+
+def test_checks_are_editable_and_queues_can_be_fetched():
+    core = Core({"queues": QueuePlugin()}, Store(":memory:"))
+
+    async def steps(app, pilot):
+        await pick_type(app, pilot, "queues")
+        await wait_for(app, pilot, "#setting-url")
+        app.screen.query_one("#setting-url", Input).value = "http://broker"
+        app.screen.query_one("#setting-queues", Input).value = "audit.*"
+        await pilot.click("#fetch-queues")
+        await wait_for(app, pilot, "#options-queues")
+        app.screen.query_one("#options-queues", SelectionList).select("billing")
+        await pilot.pause()
+        assert app.screen.query_one("#setting-queues", Input).value == "audit.*, billing"  # typed pattern kept
+        await pilot.click("#next-manual")
+        await wait_for(app, pilot, "#check-backlog")
+        app.screen.query_one("#check-backlog-0", Input).value = "50"
+        app.screen.query_one("#check-stuck", Checkbox).value = False
+        await pilot.click("#add")
+
+    [sid] = run_wizard(core, steps)
+    source = core._all[sid]
+    assert source.settings["queues"] == "audit.*, billing"
+    assert [(c["label"], c["enabled"], c["conditions"]) for c in source.checks] == [
+        ("Backlog", True, [["size", ">", 50.0]]),
+        ("Stuck", False, [["size", ">", 0.0], ["dequeued", "=", 0.0]]),
+    ]

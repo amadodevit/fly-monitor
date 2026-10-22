@@ -15,7 +15,7 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Collapsible, Input, Label, OptionList, SelectionList, Static
+from textual.widgets import Button, Checkbox, Collapsible, Input, Label, OptionList, SelectionList, Static
 from textual.widgets.option_list import Option
 from textual.widgets.selection_list import Selection
 
@@ -40,6 +40,12 @@ DIALOG_CSS = """
 #dialog .rule { height: auto; }
 #dialog .rule Input { width: 8; }
 #dialog .rule Static { width: auto; padding: 1 1 0 1; }
+#dialog .check { height: auto; }
+#dialog .check Checkbox { border: none; padding: 0; }
+#dialog .check .rule { padding-left: 4; }
+#dialog .check .rule Input { width: 10; }
+#dialog .fetch { height: auto; }
+#dialog .fetch Input { width: 1fr; }
 #dialog #result { margin-top: 1; height: auto; }
 #dialog #buttons { height: auto; margin-top: 1; }
 #dialog Button { margin-right: 1; }
@@ -150,7 +156,10 @@ class AddSourceScreen(ModalScreen[list[str]]):
         widgets: list = []
         for setting in self._identity_settings():
             widgets.append(Label(f"{setting.label}{' *' if setting.required else ''}", classes="field"))
-            widgets.append(Input(id=f"setting-{setting.key}", password=setting.secret, placeholder=setting.default or ""))
+            field = Input(id=f"setting-{setting.key}", password=setting.secret, placeholder=setting.default or "")
+            if setting.fetch:
+                field = Horizontal(field, Button("Fetch", id=f"fetch-{setting.key}"), classes="fetch")
+            widgets.append(field)
             if setting.help:
                 widgets.append(Static(setting.help, classes="help"))
         await body.mount_all(widgets)
@@ -168,6 +177,9 @@ class AddSourceScreen(ModalScreen[list[str]]):
         rule = self.plugin.default_rule
         self._title("What to watch?" if choice_settings else "When is it failing?" if rule else "Almost done")
         widgets: list = []
+        if self.plugin.default_checks:
+            widgets.append(Label("Bad check when", classes="field"))
+            widgets += [self._check_row(check) for check in self.plugin.default_checks]
         if rule:
             widgets += [
                 Label("Failing when", classes="field"),
@@ -232,6 +244,8 @@ class AddSourceScreen(ModalScreen[list[str]]):
                 await self._go("watch")
             case "test":
                 await self._test()
+            case str(button) if button.startswith("fetch-"):
+                self.run_worker(self._fetch(button.removeprefix("fetch-")), group="fetch", exclusive=True)
             case "add":
                 self._add()
 
@@ -245,6 +259,61 @@ class AddSourceScreen(ModalScreen[list[str]]):
         else:
             self.query_one("#result", Static).update(Text(f"✓ {message}", style="green"))
 
+    async def _fetch(self, key: str) -> None:
+        """Ask the plugin for values to pick from; ticking one adds it to the field."""
+        assert self.plugin is not None
+        self.query_one("#result", Static).update(Text("Fetching…", style="italic"))
+        try:
+            values = await asyncio.to_thread(self.core.setting_options, self.plugin.name, self._manual_values(), key)
+        except Exception as exc:
+            self._error(str(exc) or type(exc).__name__)
+            return
+        self.query_one("#result", Static).update(Text(f"{len(values)} found. Tick to add, or type a pattern.", style="dim"))
+        for old in self.query(f"#options-{key}"):
+            await old.remove()
+        typed = set(_split(self.query_one(f"#setting-{key}", Input).value))
+        picker = SelectionList(*((v, v, v in typed) for v in values), id=f"options-{key}")
+        row = self.query_one(f"#fetch-{key}").parent
+        await row.parent.mount(picker, after=row)
+        picker.focus()
+
+    def on_selection_list_selected_changed(self, event: SelectionList.SelectedChanged) -> None:
+        list_id = event.selection_list.id or ""
+        if not list_id.startswith("options-"):
+            return
+        field = self.query_one(f"#setting-{list_id.removeprefix('options-')}", Input)
+        offered = {event.selection_list.get_option_at_index(i).value for i in range(event.selection_list.option_count)}
+        patterns = [v for v in _split(field.value) if v not in offered]  # keep what was typed by hand
+        field.value = ", ".join(patterns + list(event.selection_list.selected))
+
+    def _check_row(self, check) -> Vertical:
+        metrics = {m.key: m for m in self.plugin.metrics}
+        row: list = []
+        for n, condition in enumerate(check.conditions):
+            metric = metrics[condition.metric]
+            name = f"{metric.label.lower()}{' per sync' if metric.counter else ''}"
+            row.append(Static(f"{'and ' if n else ''}{name} {condition.op}"))
+            row.append(Input(f"{condition.value:g}", id=f"check-{check.id}-{n}", type="number"))
+        return Vertical(
+            Checkbox(check.label, check.enabled, id=f"check-{check.id}"),
+            Horizontal(*row, classes="rule"),
+            classes="check",
+        )
+
+    def _checks(self) -> list[dict] | None:
+        if not self.plugin.default_checks:
+            return None
+        checks = []
+        for check in self.plugin.default_checks:
+            data = check.to_dict()
+            data["enabled"] = self.query_one(f"#check-{check.id}", Checkbox).value
+            data["conditions"] = [
+                [m, op, float(self.query_one(f"#check-{check.id}-{n}", Input).value)]
+                for n, (m, op, _) in enumerate(data["conditions"])
+            ]
+            checks.append(data)
+        return checks
+
     def _add(self) -> None:
         assert self.plugin is not None
         try:
@@ -257,8 +326,9 @@ class AddSourceScreen(ModalScreen[list[str]]):
                     "window": int(self.query_one("#rule-window", Input).value),
                     "recover_after": int(self.query_one("#rule-recover", Input).value),
                 }
+            checks = self._checks()
         except ValueError as exc:
-            self._error(str(exc) if "interval" in str(exc) else "rule numbers must be whole numbers")
+            self._error(str(exc) if "interval" in str(exc) else "rule and check values must be numbers")
             return
         tags = tuple(t.strip() for t in self.query_one("#tags", Input).value.split(",") if t.strip())
         choices = {
@@ -277,7 +347,9 @@ class AddSourceScreen(ModalScreen[list[str]]):
         for name, settings in targets:
             try:
                 added.append(
-                    self.core.add_source(self.plugin.name, name, settings, interval=interval, tags=tags, rule=rule)
+                    self.core.add_source(
+                        self.plugin.name, name, settings, interval=interval, tags=tags, rule=rule, checks=checks
+                    )
                 )
             except ValueError as exc:
                 if added:
@@ -304,6 +376,10 @@ class AddSourceScreen(ModalScreen[list[str]]):
 
     def _error(self, message: str) -> None:
         self.query_one("#result", Static).update(Text(f"✗ {message}", style="bold red"))
+
+
+def _split(value: str) -> list[str]:
+    return [v.strip() for v in value.split(",") if v.strip()]
 
 
 def _duration(seconds: int) -> str:

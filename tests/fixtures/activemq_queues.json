@@ -1,0 +1,33 @@
+{
+  "request": {
+    "mbean": "org.apache.activemq:brokerName=localhost,destinationName=*,destinationType=Queue,type=Broker",
+    "attribute": [
+      "QueueSize",
+      "EnqueueCount",
+      "DequeueCount",
+      "ConsumerCount"
+    ],
+    "type": "read"
+  },
+  "value": {
+    "org.apache.activemq:brokerName=localhost,destinationName=orders.paid,destinationType=Queue,type=Broker": {
+      "QueueSize": 0,
+      "EnqueueCount": 0,
+      "ConsumerCount": 0,
+      "DequeueCount": 0
+    },
+    "org.apache.activemq:brokerName=localhost,destinationName=billing.invoices,destinationType=Queue,type=Broker": {
+      "QueueSize": 0,
+      "EnqueueCount": 0,
+      "ConsumerCount": 0,
+      "DequeueCount": 0
+    },
+    "org.apache.activemq:brokerName=localhost,destinationName=orders.created,destinationType=Queue,type=Broker": {
+      "QueueSize": 3,
+      "EnqueueCount": 3,
+      "ConsumerCount": 0,
+      "DequeueCount": 0
+    }
+  },
+  "status": 200
+}

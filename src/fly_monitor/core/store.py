@@ -163,12 +163,14 @@ class Store:
         columns = {row[1] for row in self._db.execute("PRAGMA table_info(sources)")}
         if "rule" not in columns:  # databases from before sample-based sources
             self._db.execute("ALTER TABLE sources ADD COLUMN rule TEXT")
+        if "checks" not in columns:  # databases from before checks
+            self._db.execute("ALTER TABLE sources ADD COLUMN checks TEXT")
 
     # -- sources ----------------------------------------------------------------
 
     def list_sources(self) -> list[SourceConfig]:
         rows = self._db.execute(
-            "SELECT id, plugin, name, interval, tags, settings, rule FROM sources ORDER BY position"
+            "SELECT id, plugin, name, interval, tags, settings, rule, checks FROM sources ORDER BY position"
         ).fetchall()
         return [
             SourceConfig(
@@ -179,8 +181,9 @@ class Store:
                 tags=tuple(json.loads(tags)),
                 settings=json.loads(settings),  # secrets stay in the keyring until sync
                 rule=json.loads(rule) if rule else None,
+                checks=json.loads(checks) if checks else None,
             )
-            for source_id, plugin, name, interval, tags, settings, rule in rows
+            for source_id, plugin, name, interval, tags, settings, rule, checks in rows
         ]
 
     def add_source(self, source: SourceConfig, secret_keys: set[str]) -> None:
@@ -190,7 +193,8 @@ class Store:
         with self._db:
             (position,) = self._db.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM sources").fetchone()
             self._db.execute(
-                "INSERT INTO sources (id, plugin, name, interval, tags, settings, position, rule) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO sources (id, plugin, name, interval, tags, settings, position, rule, checks) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     source.id,
                     source.plugin,
@@ -200,6 +204,7 @@ class Store:
                     json.dumps(public),
                     position,
                     json.dumps(source.rule) if source.rule else None,
+                    json.dumps(source.checks) if source.checks is not None else None,
                 ),
             )
             for key, value in secret.items():  # a keyring failure rolls the whole insert back

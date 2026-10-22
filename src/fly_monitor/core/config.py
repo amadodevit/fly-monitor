@@ -33,6 +33,7 @@ class SourceConfig:
     tags: tuple[str, ...] = ()
     settings: dict[str, Any] = field(default_factory=dict)
     rule: dict[str, int] | None = None  # health rule for sample-based sources
+    checks: list[dict] | None = None  # sample-based sources: Check.to_dict() each
 
 
 _DURATION = re.compile(r"^(\d+)\s*([smh]?)$")

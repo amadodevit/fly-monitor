@@ -12,9 +12,11 @@ import re
 import time
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
+from . import checks as checklib
+from .checks import Check
 from .config import DEFAULT_INTERVAL, SourceConfig
 from .connections import CONNECTIONS, resolve_secret
 from .diff import diff_snapshot
@@ -22,7 +24,7 @@ from .health import FAILING, Health, Rule, step
 from .models import HealthView, Item, ItemView, Sample, SourceView, State
 from .notify import FAILING as FAILING_EVENT
 from .notify import NEW_ITEM, DesktopChannel, Event
-from .plugin import Setting, SourcePlugin, SyncContext
+from .plugin import Metric, Setting, SourcePlugin, SyncContext
 from .store import Store
 
 ERROR_RETRY = 300  # after a failed sync, try again within 5 min even if the interval is longer
@@ -39,6 +41,8 @@ class PluginInfo:
     kind: str  # "items" (things that come and go) or "samples" (rows that are always there)
     default_interval: int
     default_rule: Rule | None  # only for "samples"
+    metrics: tuple[Metric, ...] = ()
+    default_checks: tuple[Check, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -124,6 +128,8 @@ class Core:
                 kind=_kind(p),
                 default_interval=getattr(p, "default_interval", DEFAULT_INTERVAL),
                 default_rule=getattr(p, "default_rule", Rule()) if _kind(p) == "samples" else None,
+                metrics=tuple(getattr(p, "metrics", ())),
+                default_checks=tuple(getattr(p, "default_checks", ())),
             )
             for p in sorted(self._plugins.values(), key=lambda p: p.name)
         )
@@ -138,15 +144,23 @@ class Core:
         tags: tuple[str, ...] = (),
         source_id: str | None = None,
         rule: dict[str, int] | None = None,
+        checks: list[dict] | None = None,
     ) -> str:
-        """Validate, persist and schedule a new source. Returns its id. Raises ValueError."""
+        """Validate, persist and schedule a new source. Returns its id. Raises ValueError.
+
+        `checks` (samples only) defaults to the plugin's default_checks.
+        """
         if not name.strip():
             raise ValueError("name is required")
         settings = self._complete_settings(plugin, settings)
-        stored_rule = None
-        if _kind(self._plugins[plugin]) == "samples":
-            default = getattr(self._plugins[plugin], "default_rule", Rule())
+        stored_rule = stored_checks = None
+        instance = self._plugins[plugin]
+        if _kind(instance) == "samples":
+            default = getattr(instance, "default_rule", Rule())
             stored_rule = (Rule.from_dict(rule) if rule else default).to_dict()  # validates
+            parsed = [Check.from_dict(c) for c in checks] if checks is not None else list(getattr(instance, "default_checks", ()))
+            checklib.validate(parsed, getattr(instance, "metrics", ()))
+            stored_checks = [c.to_dict() for c in parsed]
         source = SourceConfig(
             id=source_id or self._new_id(name),
             plugin=plugin,
@@ -155,6 +169,7 @@ class Core:
             tags=tags,
             settings=settings,
             rule=stored_rule,
+            checks=stored_checks,
         )
         if source.id in self._all:
             raise ValueError(f"a source with id {source.id!r} already exists")
@@ -192,6 +207,15 @@ class Core:
             )
             for c in instance.detect()
         )
+
+    def setting_options(self, plugin: str, settings: dict[str, Any], key: str) -> list[str]:
+        """Blocking. Values the user can pick for a Setting with fetch=True, e.g. queue names."""
+        instance = self._plugins[plugin]
+        if not hasattr(instance, "options"):
+            return []
+        settings = self._complete_settings(plugin, settings)
+        with CONNECTIONS[instance.connection]() as conn:
+            return list(instance.options(SyncContext(settings=self._resolve(plugin, settings), http=conn), key))
 
     def test_settings(self, plugin: str, settings: dict[str, Any]) -> str:
         """Blocking. Ask the plugin to verify these settings work, before saving."""
@@ -303,9 +327,11 @@ class Core:
         now = self._clock()
         rule = Rule.from_dict(source.rule)
         previous = self._store.health(source.id)
+        before = {key: s.values for key, (s, _) in self._store.latest_samples(source.id).items()}
         latest: dict[str, Sample] = {}
         for sample in samples:
-            latest.setdefault(sample.key, sample)  # one result per row per sync
+            if sample.key not in latest:  # one result per row per sync
+                latest[sample.key] = self._judge(source, sample, before.get(sample.key))
         health = {key: step(previous.get(key), sample.ok, now, rule) for key, sample in latest.items()}
         self._store.record_samples(source.id, list(latest.values()), health, now)
         return [
@@ -313,6 +339,17 @@ class Core:
             for key, h in health.items()
             if h.state == FAILING and (previous.get(key) is None or previous[key].state != FAILING)
         ]
+
+    def _judge(self, source: SourceConfig, sample: Sample, previous: dict | None) -> Sample:
+        """Add counter growth to the summary, then apply the source's checks: any that fires
+        makes this a bad check, named in the summary."""
+        metrics = getattr(self._plugins[source.plugin], "metrics", ())
+        checks = [Check.from_dict(c) for c in source.checks or ()]
+        labels = checklib.fired(checks, sample.values, previous, metrics)
+        summary = " · ".join(
+            part for part in (sample.summary, checklib.growth_summary(sample.values, previous, metrics), ", ".join(labels)) if part
+        )
+        return replace(sample, ok=sample.ok and not labels, summary=summary)
 
     def _event(self, kind: str, source: SourceConfig, *, title: str, body: str, url: str) -> Event:
         self._seq += 1

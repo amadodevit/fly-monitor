@@ -36,6 +36,17 @@ class Setting:
     default: str | None = None
     help: str = ""
     choices: tuple[Choice, ...] = ()
+    fetch: bool = False  # the form can ask the plugin's options(ctx, key) for values to pick from
+
+
+@dataclass(frozen=True)
+class Metric:
+    """A number a samples plugin reports in `Sample.values`. Rules (checks) are written against these."""
+
+    key: str
+    label: str
+    counter: bool = False  # only goes up (e.g. messages dequeued since start); checks see its growth per sync
+    short: str = ""  # name in rows, e.g. "+120 in"; defaults to the label
 
 
 @dataclass(frozen=True)
@@ -76,3 +87,9 @@ class SourcePlugin(Protocol):
     #   def detect(self) -> list[Candidate]
     #       Look for sources on this machine (e.g. logged-in CLIs). Never raise
     #       for "nothing found"; return [].
+    #
+    #   def options(self, ctx: SyncContext, key: str) -> list[str]
+    #       Values to pick from for a Setting with fetch=True, e.g. queue names.
+    #
+    #   metrics: tuple[Metric, ...]          samples plugins: the numbers in Sample.values
+    #   default_checks: tuple[Check, ...]    samples plugins: editable checks on those metrics
