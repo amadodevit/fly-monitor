@@ -15,10 +15,13 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("check", help="test each source's connection and exit")
     args = parser.parse_args(argv)
 
-    core = Core(discover(), Store(data_path()))
+    store = Store(data_path())
+    moved = _migrate_secrets(store)  # before Core loads the sources
+    core = Core(discover(), store)
     notice = _import_config_once(core)
     if notice is None:
         return 1
+    notice = " ".join(n for n in (notice, moved) if n)
 
     if args.command == "check":
         return _check(core)
@@ -42,6 +45,19 @@ def _import_config_once(core: Core) -> str | None:
     if not count:
         return ""
     return f"Imported {count} source{'s' * (count != 1)} from {path}. That file is no longer read."
+
+
+def _migrate_secrets(store: Store) -> str:
+    """Older versions kept secrets in the database. Move them to the keyring once."""
+    try:
+        moved, left = store.migrate_secrets()
+    except Exception as exc:
+        return f"Could not move secrets to the keyring: {exc}"
+    if left:
+        return f"{left} secret{'s' * (left != 1)} still stored in plaintext: no keyring on this machine."
+    if moved:
+        return f"Moved {moved} secret{'s' * (moved != 1)} out of the database."
+    return ""
 
 
 def _check(core: Core) -> int:

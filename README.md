@@ -11,8 +11,9 @@ uv run pytest
 Sources live in `~/.local/share/fly-monitor/state.db` (owner-only). An existing
 `~/.config/fly-monitor/config.toml` is imported once on first run (see `config.example.toml`).
 
-Secrets typed into the form are stored in plaintext in that database for now. Prefer
-`gh:<user>` or `env:VAR` references, which store no secret at all.
+Secrets typed into the form go to your OS keyring (GNOME Keyring, KWallet, macOS Keychain,
+Windows Credential Manager), never into that database. Without a keyring, for example over SSH,
+use a `gh:<user>` or `env:VAR` reference instead, which stores no secret at all.
 
 A website is failing when 5 of its last 10 checks failed, and recovers after 3 good checks in a row
 (both adjustable when adding it). After a recovery only new checks count, so a flaky site doesn't flap.

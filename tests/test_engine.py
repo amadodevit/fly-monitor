@@ -248,3 +248,18 @@ def test_store_migrates_databases_without_rule_column(tmp_path):
     db.close()
     [source] = Store(path).list_sources()
     assert source.id == "gh" and source.rule is None
+
+
+def test_secret_reaches_the_plugin_at_sync_and_a_locked_keyring_retries(fake_keyring):
+    plugin, clock = FakePlugin(), Clock()
+    core = Core({"fake": plugin}, Store(":memory:"), clock=clock)
+    core.add_source("fake", "S1", {"account": "me", "token": "t0k"}, interval=3600, source_id="s1")
+    asyncio.run(core.sync_now())
+    assert plugin.seen_settings["token"] == "t0k"
+
+    fake_keyring.locked = True
+    clock.now += 3600
+    asyncio.run(core.sync_now())
+    assert "keyring locked" in core.get_state().sources[0].last_error
+    clock.now += ERROR_RETRY
+    assert core._is_due("s1")  # retried within 5 minutes, not an hour

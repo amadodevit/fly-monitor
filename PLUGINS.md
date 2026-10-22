@@ -46,7 +46,7 @@ You never write UI. Each `Setting` becomes one field in the add-source wizard.
 |---|---|
 | `key`, `label` | The key in `ctx.settings` and the label in the form. |
 | `required` | The form refuses to add the source while it is empty. Default `True`. |
-| `secret` | Masked in the form and stored apart from other settings. |
+| `secret` | Masked in the form and kept in the OS keyring, never in the database. |
 | `default` | Prefilled value, also used when the user leaves it empty. |
 | `help` | One line under the field. Put an example here. |
 | `choices` | Turns the field into a checklist. The value is a list of the ticked `Choice.value`s. |

@@ -8,4 +8,5 @@ Changes to the plugin contract are marked **Plugins**.
 - GitHub source: review requests, comments and mentions, accounts detected through `gh`.
 - Website source: status code and response time, failing after 5 of the last 10 checks.
 - Desktop and in-app notifications, acknowledge and close, ignore.
+- Secrets live in the OS keyring. Older databases are migrated on startup.
 - **Plugins:** first version of the contract, see [PLUGINS.md](PLUGINS.md).

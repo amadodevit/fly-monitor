@@ -207,7 +207,7 @@ class Core:
         if source_id in self._invalid:
             raise RuntimeError(self._invalid[source_id])
         source = self._sources[source_id]
-        return self.test_settings(source.plugin, source.settings)
+        return self.test_settings(source.plugin, self._with_secrets(source))
 
     def import_config(self, sources: list[SourceConfig]) -> int:
         """One-time import of config.toml. Does nothing after the first successful run."""
@@ -257,7 +257,7 @@ class Core:
             self._last_attempt[source_id] = self._clock()
             source = self._sources[source_id]
             try:
-                items = await asyncio.to_thread(self._fetch, source)
+                items = await asyncio.to_thread(self._fetch, source, self._store.secrets.keys(source_id))
             except Exception as exc:  # a broken source must not take the core down
                 if source_id in self._sources:
                     self._store.record_error(source_id, _describe(exc))
@@ -274,10 +274,13 @@ class Core:
         if events:
             await asyncio.to_thread(self._desktop.send, events)
 
-    def _fetch(self, source: SourceConfig) -> list[Item] | list[Sample]:
+    def _fetch(self, source: SourceConfig, secret_keys: tuple[str, ...]) -> list[Item] | list[Sample]:
+        """Runs in a worker thread: no database access here."""
         plugin = self._plugins[source.plugin]
+        settings = {**source.settings, **self._store.secrets.read(source.id, secret_keys)}
         with CONNECTIONS[plugin.connection]() as conn:
-            return plugin.sync(SyncContext(settings=self._resolve(source.plugin, source.settings), http=conn))
+            settings = self._resolve(source.plugin, settings)
+            return plugin.sync(SyncContext(settings=settings, http=conn))
 
     def _apply(self, source: SourceConfig, items: list[Item]) -> list[Event]:
         now = self._clock()
@@ -355,6 +358,9 @@ class Core:
 
     def _secret_keys(self, plugin: str) -> set[str]:
         return {s.key for s in self._plugins[plugin].settings if s.secret}
+
+    def _with_secrets(self, source: SourceConfig) -> dict[str, Any]:
+        return {**source.settings, **self._store.secrets.get_all(source.id)}
 
     def _resolve(self, plugin: str, settings: dict[str, Any]) -> dict[str, Any]:
         resolved = dict(settings)

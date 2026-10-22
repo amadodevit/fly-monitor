@@ -7,11 +7,18 @@ import os
 import sqlite3
 from pathlib import Path
 
+import keyring
+from keyring.errors import KeyringError
+
 from .config import SourceConfig
+from .connections import is_reference
 from .health import Health
 from .models import Item, Sample
 
 SAMPLES_KEPT = 50  # per row; enough for any reasonable rule window
+KEYRING_SERVICE = "fly-monitor"
+# Backends that "work" but keep secrets in a plain file, or not at all.
+INSECURE_BACKENDS = ("keyrings.alt", "keyring.backends.fail", "keyring.backends.null")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sources (
@@ -23,10 +30,17 @@ CREATE TABLE IF NOT EXISTS sources (
     settings TEXT NOT NULL,
     position INTEGER NOT NULL
 );
+-- Legacy: plaintext secrets from before the keyring. Emptied by Store.migrate_secrets().
 CREATE TABLE IF NOT EXISTS source_secrets (
     source_id TEXT NOT NULL,
     key       TEXT NOT NULL,
     value     TEXT NOT NULL,
+    PRIMARY KEY (source_id, key)
+);
+-- Which secrets a source has in the keyring. Names only, never values.
+CREATE TABLE IF NOT EXISTS keyring_entries (
+    source_id TEXT NOT NULL,
+    key       TEXT NOT NULL,
     PRIMARY KEY (source_id, key)
 );
 CREATE TABLE IF NOT EXISTS source_state (
@@ -70,28 +84,68 @@ CREATE TABLE IF NOT EXISTS meta (
 
 
 class SecretStore:
-    """Where secret settings live. Plaintext in SQLite for now.
+    """Where secret settings live: the OS keyring, never the database.
 
-    This is the only class that touches secret values on disk, so moving to the
-    OS keyring later means rewriting it and nothing else.
+    This is the only class that touches secret values, so swapping the backend
+    means rewriting it and nothing else. The database only records which keys
+    a source has, so a source can be removed without asking the keyring.
     """
 
     def __init__(self, db: sqlite3.Connection) -> None:
         self._db = db
 
+    def available(self) -> bool:
+        return _secure(keyring.get_keyring())
+
     def get_all(self, source_id: str) -> dict[str, str]:
-        rows = self._db.execute("SELECT key, value FROM source_secrets WHERE source_id = ?", (source_id,))
-        return dict(rows.fetchall())
+        return self.read(source_id, self.keys(source_id))
+
+    def keys(self, source_id: str) -> tuple[str, ...]:
+        rows = self._db.execute("SELECT key FROM keyring_entries WHERE source_id = ?", (source_id,))
+        return tuple(key for (key,) in rows)
+
+    def read(self, source_id: str, keys: tuple[str, ...]) -> dict[str, str]:
+        """Keyring only, no database, so it can run in a worker thread.
+
+        Called at sync time, not at startup, so a locked keyring only stops syncing.
+        """
+        secrets = {}
+        for key in keys:
+            try:
+                value = keyring.get_password(KEYRING_SERVICE, _entry(source_id, key))
+            except KeyringError as exc:
+                raise RuntimeError(f"keyring locked or unavailable ({type(exc).__name__}): unlock it to sync") from None
+            if value is None:
+                raise RuntimeError(f"secret {key!r} is missing from the keyring: remove this source and add it again")
+            secrets[key] = value
+        return secrets
 
     def put(self, source_id: str, key: str, value: str) -> None:
-        self._db.execute(
-            "INSERT INTO source_secrets (source_id, key, value) VALUES (?, ?, ?) "
-            "ON CONFLICT(source_id, key) DO UPDATE SET value = excluded.value",
-            (source_id, key, value),
-        )
+        if not self.available():
+            raise ValueError("No keyring on this machine: use env:VAR or gh:<user>")
+        keyring.set_password(KEYRING_SERVICE, _entry(source_id, key), value)
+        self._db.execute("INSERT OR IGNORE INTO keyring_entries (source_id, key) VALUES (?, ?)", (source_id, key))
 
     def delete_source(self, source_id: str) -> None:
+        rows = self._db.execute("SELECT key FROM keyring_entries WHERE source_id = ?", (source_id,)).fetchall()
+        for (key,) in rows:
+            try:
+                keyring.delete_password(KEYRING_SERVICE, _entry(source_id, key))
+            except KeyringError:
+                pass  # already gone, or locked: removing the source must still work
+        self._db.execute("DELETE FROM keyring_entries WHERE source_id = ?", (source_id,))
         self._db.execute("DELETE FROM source_secrets WHERE source_id = ?", (source_id,))
+
+
+def _entry(source_id: str, key: str) -> str:
+    return f"{source_id}/{key}"
+
+
+def _secure(backend: object) -> bool:
+    nested = getattr(backend, "backends", None)  # the chainer backend wraps several
+    if nested is not None:
+        return any(_secure(b) for b in nested)
+    return getattr(backend, "priority", 0) >= 1 and not type(backend).__module__.startswith(INSECURE_BACKENDS)
 
 
 class Store:
@@ -123,14 +177,16 @@ class Store:
                 name=name,
                 interval=interval,
                 tags=tuple(json.loads(tags)),
-                settings={**json.loads(settings), **self.secrets.get_all(source_id)},
+                settings=json.loads(settings),  # secrets stay in the keyring until sync
                 rule=json.loads(rule) if rule else None,
             )
             for source_id, plugin, name, interval, tags, settings, rule in rows
         ]
 
     def add_source(self, source: SourceConfig, secret_keys: set[str]) -> None:
-        public = {k: v for k, v in source.settings.items() if k not in secret_keys}
+        """Secrets go to the keyring; references like gh:<user> are not secret and stay here."""
+        secret = {k: str(v) for k, v in source.settings.items() if k in secret_keys and not is_reference(str(v))}
+        public = {k: v for k, v in source.settings.items() if k not in secret}
         with self._db:
             (position,) = self._db.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM sources").fetchone()
             self._db.execute(
@@ -146,8 +202,8 @@ class Store:
                     json.dumps(source.rule) if source.rule else None,
                 ),
             )
-            for key in secret_keys & source.settings.keys():
-                self.secrets.put(source.id, key, str(source.settings[key]))
+            for key, value in secret.items():  # a keyring failure rolls the whole insert back
+                self.secrets.put(source.id, key, value)
 
     def remove_source(self, source_id: str) -> None:
         with self._db:
@@ -161,6 +217,38 @@ class Store:
             ):
                 self._db.execute(f"DELETE FROM {table} WHERE {column} = ?", (source_id,))
             self.secrets.delete_source(source_id)
+
+    def migrate_secrets(self) -> tuple[int, int]:
+        """Move plaintext secrets from older databases into the keyring.
+
+        Each secret is written, read back, and only then deleted here. Returns
+        (moved, left behind); without a keyring everything stays put.
+        """
+        rows = self._db.execute("SELECT source_id, key, value FROM source_secrets").fetchall()
+        if not rows:
+            return 0, 0
+        moved = 0
+        for source_id, key, value in rows:
+            with self._db:
+                if is_reference(value):
+                    self._move_to_settings(source_id, key, value)
+                elif self.secrets.available():
+                    self.secrets.put(source_id, key, value)
+                    if keyring.get_password(KEYRING_SERVICE, _entry(source_id, key)) != value:
+                        raise RuntimeError(f"keyring did not keep {source_id}/{key}; nothing deleted")
+                else:
+                    continue
+                self._db.execute("DELETE FROM source_secrets WHERE source_id = ? AND key = ?", (source_id, key))
+            moved += 1
+        if moved:
+            self._db.execute("VACUUM")  # deleted rows can linger in free pages until the file is rewritten
+        return moved, len(rows) - moved
+
+    def _move_to_settings(self, source_id: str, key: str, value: str) -> None:
+        row = self._db.execute("SELECT settings FROM sources WHERE id = ?", (source_id,)).fetchone()
+        if row:
+            settings = {**json.loads(row[0]), key: value}
+            self._db.execute("UPDATE sources SET settings = ? WHERE id = ?", (json.dumps(settings), source_id))
 
     def get_meta(self, key: str) -> str | None:
         row = self._db.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()

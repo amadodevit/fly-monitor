@@ -48,6 +48,14 @@ class HttpConnection:
         self.close()
 
 
+REFERENCE_PREFIXES = ("gh:", "env:")
+
+
+def is_reference(value: str) -> bool:
+    """A reference names where a secret lives, so storing it reveals nothing."""
+    return value.startswith(REFERENCE_PREFIXES)
+
+
 def resolve_secret(value: str) -> str:
     """Turn a secret reference into its value.
 

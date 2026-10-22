@@ -1,25 +1,83 @@
 import json
 import stat
 
+import pytest
+
 from fly_monitor.core.config import SourceConfig
 from fly_monitor.core.store import Store
 
 
-def test_secrets_are_kept_apart_from_settings():
+def test_secrets_go_to_the_keyring_not_the_database(fake_keyring):
     store = Store(":memory:")
     store.add_source(SourceConfig(id="s", plugin="p", name="S", settings={"account": "me", "token": "t0k"}), {"token"})
     (raw,) = store._db.execute("SELECT settings FROM sources").fetchone()
     assert json.loads(raw) == {"account": "me"}
+    assert fake_keyring.entries == {("fly-monitor", "s/token"): "t0k"}
     assert store.secrets.get_all("s") == {"token": "t0k"}
     [loaded] = store.list_sources()
-    assert loaded.settings == {"account": "me", "token": "t0k"}
+    assert loaded.settings == {"account": "me"}  # not read until sync
 
 
-def test_remove_source_removes_secrets():
+def test_references_are_not_secret_and_stay_in_the_database(fake_keyring):
+    store = Store(":memory:")
+    store.add_source(SourceConfig(id="s", plugin="p", name="S", settings={"token": "gh:alice"}), {"token"})
+    assert store.list_sources()[0].settings == {"token": "gh:alice"}
+    assert fake_keyring.entries == {}
+
+
+def test_no_keyring_refuses_plaintext_but_accepts_references(fake_keyring):
+    fake_keyring.priority = 0  # what the "fail" backend reports
+    store = Store(":memory:")
+    with pytest.raises(ValueError, match="No keyring"):
+        store.add_source(SourceConfig(id="s", plugin="p", name="S", settings={"token": "t0k"}), {"token"})
+    assert store.list_sources() == []  # rolled back
+    store.add_source(SourceConfig(id="s", plugin="p", name="S", settings={"token": "env:TOKEN"}), {"token"})
+    assert store.list_sources()[0].settings == {"token": "env:TOKEN"}
+
+
+def test_locked_keyring_is_a_clear_error(fake_keyring):
+    store = Store(":memory:")
+    store.add_source(SourceConfig(id="s", plugin="p", name="S", settings={"token": "t0k"}), {"token"})
+    fake_keyring.locked = True
+    with pytest.raises(RuntimeError, match="keyring locked"):
+        store.secrets.get_all("s")
+
+
+def legacy_store(tmp_path):
+    """A database as older versions left it: secrets in plaintext."""
+    store = Store(tmp_path / "state.db")
+    store.add_source(SourceConfig(id="s", plugin="p", name="S", settings={"account": "me"}), set())
+    store._db.executemany(
+        "INSERT INTO source_secrets (source_id, key, value) VALUES (?, ?, ?)",
+        [("s", "token", "plain-t0k"), ("s", "backup", "env:BACKUP")],
+    )
+    store._db.commit()
+    return store
+
+
+def test_migration_moves_secrets_out_of_the_file(tmp_path, fake_keyring):
+    store = legacy_store(tmp_path)
+    assert store.migrate_secrets() == (2, 0)
+    assert store._db.execute("SELECT COUNT(*) FROM source_secrets").fetchone() == (0,)
+    assert fake_keyring.entries == {("fly-monitor", "s/token"): "plain-t0k"}
+    assert store.list_sources()[0].settings == {"account": "me", "backup": "env:BACKUP"}
+    store.close()
+    assert b"plain-t0k" not in (tmp_path / "state.db").read_bytes()  # vacuumed, not just deleted
+
+
+def test_migration_without_keyring_leaves_secrets_in_place(tmp_path, fake_keyring):
+    fake_keyring.priority = 0
+    store = legacy_store(tmp_path)
+    assert store.migrate_secrets() == (1, 1)  # the reference moves, the plaintext secret waits
+    assert store._db.execute("SELECT value FROM source_secrets").fetchall() == [("plain-t0k",)]
+
+
+def test_remove_source_removes_secrets(fake_keyring):
     store = Store(":memory:")
     store.add_source(SourceConfig(id="s", plugin="p", name="S", settings={"token": "t"}), {"token"})
     store.remove_source("s")
     assert store.list_sources() == [] and store.secrets.get_all("s") == {}
+    assert fake_keyring.entries == {}
 
 
 def test_sources_keep_insertion_order():
