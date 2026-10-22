@@ -22,8 +22,9 @@ An ActiveMQ queue has a bad check when one of its checks fires: no consumers, st
 but none dequeued since the last sync) or a backlog. You can untick them and change the numbers when
 adding the broker. By default a queue is failing after 3 bad checks in a row, synced every minute.
 
-New GitHub items, and websites or queues going failing, raise a desktop popup (notify-send) and an in-app toast,
-while fly-monitor is open. A source's first sync stays quiet.
+New GitHub items, and websites or queues going failing or recovering, raise a desktop popup (notify-send) and an in-app toast,
+while fly-monitor is open. A source's first sync stays quiet. A source's header turns red while one of its
+rows is failing, even when folded, and failing rows are listed first.
 
 Want to monitor something else? Write a plugin: see [PLUGINS.md](PLUGINS.md) and the
 example in [`examples/fly-monitor-disk`](examples/fly-monitor-disk).

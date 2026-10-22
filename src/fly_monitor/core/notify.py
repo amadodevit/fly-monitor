@@ -14,13 +14,14 @@ from dataclasses import dataclass
 
 NEW_ITEM = "new_item"
 FAILING = "failing"
+RECOVERED = "recovered"
 
 
 @dataclass(frozen=True)
 class Event:
     seq: int
     at: float
-    kind: str  # NEW_ITEM | FAILING
+    kind: str  # NEW_ITEM | FAILING | RECOVERED
     source_id: str
     source_name: str
     title: str
@@ -43,7 +44,8 @@ class DesktopChannel:
         if len(events) == 1:
             title, body = events[0].title, events[0].body
         else:
-            title = f"{len(events)} new on {events[0].source_name}"
+            what = "new" if all(e.kind == NEW_ITEM for e in events) else "changes"
+            title = f"{len(events)} {what} on {events[0].source_name}"
             body = "\n".join(f"• {e.body}" for e in events[:5]) + ("\n…" if len(events) > 5 else "")
         try:
             self._run(

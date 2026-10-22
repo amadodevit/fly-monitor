@@ -5,7 +5,7 @@ import pytest
 from fly_monitor.core.engine import Core
 from fly_monitor.core.health import Rule
 from fly_monitor.core.models import Item, Sample
-from fly_monitor.core.notify import FAILING, NEW_ITEM, DesktopChannel, Event
+from fly_monitor.core.notify import FAILING, NEW_ITEM, RECOVERED, DesktopChannel, Event
 from fly_monitor.core.plugin import Setting
 from fly_monitor.core.store import Store
 
@@ -119,7 +119,17 @@ def test_failing_notifies_once_per_outage(probe_core):
     assert events[0].title == "✗ Site is failing"
 
     run_checks(core, plugin, sid, [True, True, False, False])  # recover, then a new outage
-    assert [e.kind for e in core.events_since(0)] == [FAILING, FAILING]
+    assert [e.kind for e in core.events_since(0)] == [FAILING, RECOVERED, FAILING]
+
+
+def test_recovery_notifies_and_reminds_to_close_when_acknowledged(probe_core):
+    core, plugin, sid = probe_core
+    run_checks(core, plugin, sid, [False, False])
+    core.acknowledge(sid, "https://site")
+    run_checks(core, plugin, sid, [True, True])
+    recovered = core.events_since(0)[-1]
+    assert recovered.kind == RECOVERED and recovered.title == "✓ Site recovered"
+    assert recovered.body.endswith("press c to close")
 
 
 def test_acknowledge_and_close_rules(probe_core):
@@ -160,8 +170,10 @@ def test_desktop_channel_single_and_batched():
     channel.send([event()])
     channel.send([event(body="A"), event(body="B"), event(FAILING, body="C")])
     assert calls[0][-2:] == ["Work: PR 1", "PR 1"] and "normal" in calls[0]
-    assert calls[1][-2] == "3 new on Work" and "critical" in calls[1]
+    assert calls[1][-2] == "3 changes on Work" and "critical" in calls[1]
     assert calls[1][-1] == "• A\n• B\n• C"
+    channel.send([event(body="A"), event(body="B")])
+    assert calls[2][-2] == "2 new on Work" and "normal" in calls[2]
 
 
 def test_desktop_channel_without_notify_send_or_daemon():

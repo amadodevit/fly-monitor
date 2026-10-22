@@ -87,7 +87,7 @@ class FlyMonitorApp(App):
             collapsed = source.id in self._collapsed
             arrow = "▸" if collapsed else "▾"
             table.add_row(
-                Text(f" {arrow} {source.name} ", style="bold reverse"),
+                Text(f" {arrow} {source.name} ", style=f"bold reverse {_attention(source)}".strip()),
                 _status(source),
                 "",
                 "",
@@ -96,7 +96,7 @@ class FlyMonitorApp(App):
             )
             if collapsed:
                 continue
-            for n, health in enumerate(source.health):
+            for n, health in enumerate(sorted(source.health, key=_attention_order)):
                 key = f"{source.id}\x1f{health.key}"
                 self._rows[key] = ("health", source.id, health.key)
                 if health.url:
@@ -241,13 +241,32 @@ def _status(source: SourceView) -> Text:
         return Text("never synced", style="dim")
     if source.health:
         failing = sum(h.state == FAILING and not h.acknowledged for h in source.health)
-        text = Text(f"checked {_ago(source.last_sync)}", style="dim")
-        if failing:
-            text = Text(f"{failing} failing", style="bold red") + Text(f" · {text.plain}", style="dim")
-        return text
+        acknowledged = sum(h.acknowledged for h in source.health)
+        ok = len(source.health) - failing - acknowledged
+        text = Text()
+        for count, label, style in ((failing, "failing", "bold red"), (acknowledged, "acknowledged", "bold dark_orange"), (ok, "ok", "dim")):
+            if count:
+                text.append(f"{count} {label}", style=style).append(" · ", style="dim")
+        return text.append(f"checked {_ago(source.last_sync)}", style="dim")
     count = len(source.items)
     ignored = f" · {source.ignored} ignored" if source.ignored else ""
     return Text(f"{count} item{'s' * (count != 1)}{ignored} · synced {_ago(source.last_sync)}", style="dim")
+
+
+def _attention(source: SourceView) -> str:
+    """Header colour: red needs you, orange is in hand, nothing is fine."""
+    if source.last_error or any(h.state == FAILING and not h.acknowledged for h in source.health):
+        return "red"
+    if any(h.acknowledged for h in source.health):
+        return "dark_orange"
+    return ""
+
+
+def _attention_order(health: HealthView) -> tuple[int, str]:
+    """Failing first, then acknowledged or recovered-but-open, then OK."""
+    if health.state == FAILING and not health.acknowledged:
+        return 0, health.key
+    return (1 if health.acknowledged else 2), health.key
 
 
 def _health_row(health: HealthView, *, last: bool) -> tuple:

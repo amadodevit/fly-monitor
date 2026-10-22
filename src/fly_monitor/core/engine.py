@@ -23,7 +23,7 @@ from .diff import diff_snapshot
 from .health import FAILING, Health, Rule, step
 from .models import HealthView, Item, ItemView, Sample, SourceView, State
 from .notify import FAILING as FAILING_EVENT
-from .notify import NEW_ITEM, DesktopChannel, Event
+from .notify import NEW_ITEM, RECOVERED, DesktopChannel, Event
 from .plugin import Metric, Setting, SourcePlugin, SyncContext
 from .store import Store
 
@@ -398,11 +398,16 @@ class Core:
                 latest[sample.key] = self._judge(source, sample, before.get(sample.key))
         health = {key: step(previous.get(key), sample.ok, now, rule) for key, sample in latest.items()}
         self._store.record_samples(source.id, list(latest.values()), health, now)
-        return [
-            self._event(FAILING_EVENT, source, title=f"✗ {source.name} is failing", body=f"{key}: {latest[key].summary}", url=latest[key].url)
-            for key, h in health.items()
-            if h.state == FAILING and (previous.get(key) is None or previous[key].state != FAILING)
-        ]
+        events = []
+        for key, h in health.items():
+            was = previous.get(key)
+            body = f"{key}: {latest[key].summary}"
+            if h.state == FAILING and (was is None or was.state != FAILING):
+                events.append(self._event(FAILING_EVENT, source, title=f"✗ {source.name} is failing", body=body, url=latest[key].url))
+            elif h.state != FAILING and was is not None and was.state == FAILING:
+                note = " · press c to close" if h.acknowledged else ""
+                events.append(self._event(RECOVERED, source, title=f"✓ {source.name} recovered", body=body + note, url=latest[key].url))
+        return events
 
     def _judge(self, source: SourceConfig, sample: Sample, previous: dict | None) -> Sample:
         """Add counter growth to the summary, then apply the source's checks: any that fires
