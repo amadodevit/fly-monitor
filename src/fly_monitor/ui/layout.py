@@ -3,7 +3,7 @@
     Client › Kind (default)        ▾ Acme                1 failing · 14 ok
                                      ▾ ActiveMQ queues       waiting  consumers  in    out
                                        ▸ Prod broker   1 failing · 5 ok   101  22  +199  +329
-                                         ✗ rawdata     ...
+                                         ✗ orders      ...
                                          +5 ok
 
 Healthy sources take one line; trouble shows without unfolding anything.
