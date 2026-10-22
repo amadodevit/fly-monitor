@@ -19,8 +19,10 @@ from textual.widgets import Button, Checkbox, Collapsible, Input, Label, OptionL
 from textual.widgets.option_list import Option
 from textual.widgets.selection_list import Selection
 
+from fly_monitor.core.checks import Check
 from fly_monitor.core.config import parse_interval
 from fly_monitor.core.engine import Core, DetectedSource, PluginInfo
+from fly_monitor.core.health import Rule
 
 DIALOG_CSS = """
 #dialog {
@@ -52,7 +54,49 @@ DIALOG_CSS = """
 """
 
 
-class AddSourceScreen(ModalScreen[list[str]]):
+class SourceFields:
+    """Field behaviour shared by the add and edit screens."""
+
+    core: Core
+    plugin: PluginInfo | None
+
+    def _fetch_settings(self) -> tuple[dict[str, str], str | None]:
+        """Settings typed so far, and the source id when editing (for its stored secrets)."""
+        raise NotImplementedError
+
+    async def _fetch(self, key: str) -> None:
+        """Ask the plugin for values to pick from; ticking one adds it to the field."""
+        assert self.plugin is not None
+        self.query_one("#result", Static).update(Text("Fetching…", style="italic"))
+        settings, source_id = self._fetch_settings()
+        try:
+            values = await asyncio.to_thread(self.core.setting_options, self.plugin.name, settings, key, source_id)
+        except Exception as exc:
+            self._error(str(exc) or type(exc).__name__)
+            return
+        self.query_one("#result", Static).update(Text(f"{len(values)} found. Tick to add, or type a pattern.", style="dim"))
+        for old in self.query(f"#options-{key}"):
+            await old.remove()
+        typed = set(_split(self.query_one(f"#setting-{key}", Input).value))
+        picker = SelectionList(*((v, v, v in typed) for v in values), id=f"options-{key}")
+        row = self.query_one(f"#fetch-{key}").parent
+        await row.parent.mount(picker, after=row)
+        picker.focus()
+
+    def on_selection_list_selected_changed(self, event: SelectionList.SelectedChanged) -> None:
+        list_id = event.selection_list.id or ""
+        if not list_id.startswith("options-"):
+            return
+        field = self.query_one(f"#setting-{list_id.removeprefix('options-')}", Input)
+        offered = {event.selection_list.get_option_at_index(i).value for i in range(event.selection_list.option_count)}
+        patterns = [v for v in _split(field.value) if v not in offered]  # keep what was typed by hand
+        field.value = ", ".join(patterns + list(event.selection_list.selected))
+
+    def _error(self, message: str) -> None:
+        self.query_one("#result", Static).update(Text(f"✗ {message}", style="bold red"))
+
+
+class AddSourceScreen(SourceFields, ModalScreen[list[str]]):
     """Returns the ids of the sources added (empty if cancelled)."""
 
     DEFAULT_CSS = "AddSourceScreen { align: center middle; }\n" + DIALOG_CSS
@@ -177,26 +221,9 @@ class AddSourceScreen(ModalScreen[list[str]]):
         rule = self.plugin.default_rule
         self._title("What to watch?" if choice_settings else "When is it failing?" if rule else "Almost done")
         widgets: list = []
-        if self.plugin.default_checks:
-            widgets.append(Label("Bad check when", classes="field"))
-            widgets += [self._check_row(check) for check in self.plugin.default_checks]
+        widgets += _check_widgets(self.plugin.default_checks, self.plugin.metrics)
         if rule:
-            widgets += [
-                Label("Failing when", classes="field"),
-                Horizontal(
-                    Input(str(rule.fail_after), id="rule-fail", type="integer"),
-                    Static("of the last"),
-                    Input(str(rule.window), id="rule-window", type="integer"),
-                    Static("checks fail"),
-                    classes="rule",
-                ),
-                Label("Recovered after", classes="field"),
-                Horizontal(
-                    Input(str(rule.recover_after), id="rule-recover", type="integer"),
-                    Static("good checks in a row"),
-                    classes="rule",
-                ),
-            ]
+            widgets += _rule_widgets(rule)
         for setting in choice_settings:
             if len(choice_settings) > 1:
                 widgets.append(Label(setting.label, classes="field"))
@@ -259,74 +286,13 @@ class AddSourceScreen(ModalScreen[list[str]]):
         else:
             self.query_one("#result", Static).update(Text(f"✓ {message}", style="green"))
 
-    async def _fetch(self, key: str) -> None:
-        """Ask the plugin for values to pick from; ticking one adds it to the field."""
-        assert self.plugin is not None
-        self.query_one("#result", Static).update(Text("Fetching…", style="italic"))
-        try:
-            values = await asyncio.to_thread(self.core.setting_options, self.plugin.name, self._manual_values(), key)
-        except Exception as exc:
-            self._error(str(exc) or type(exc).__name__)
-            return
-        self.query_one("#result", Static).update(Text(f"{len(values)} found. Tick to add, or type a pattern.", style="dim"))
-        for old in self.query(f"#options-{key}"):
-            await old.remove()
-        typed = set(_split(self.query_one(f"#setting-{key}", Input).value))
-        picker = SelectionList(*((v, v, v in typed) for v in values), id=f"options-{key}")
-        row = self.query_one(f"#fetch-{key}").parent
-        await row.parent.mount(picker, after=row)
-        picker.focus()
-
-    def on_selection_list_selected_changed(self, event: SelectionList.SelectedChanged) -> None:
-        list_id = event.selection_list.id or ""
-        if not list_id.startswith("options-"):
-            return
-        field = self.query_one(f"#setting-{list_id.removeprefix('options-')}", Input)
-        offered = {event.selection_list.get_option_at_index(i).value for i in range(event.selection_list.option_count)}
-        patterns = [v for v in _split(field.value) if v not in offered]  # keep what was typed by hand
-        field.value = ", ".join(patterns + list(event.selection_list.selected))
-
-    def _check_row(self, check) -> Vertical:
-        metrics = {m.key: m for m in self.plugin.metrics}
-        row: list = []
-        for n, condition in enumerate(check.conditions):
-            metric = metrics[condition.metric]
-            name = f"{metric.label.lower()}{' per sync' if metric.counter else ''}"
-            row.append(Static(f"{'and ' if n else ''}{name} {condition.op}"))
-            row.append(Input(f"{condition.value:g}", id=f"check-{check.id}-{n}", type="number"))
-        return Vertical(
-            Checkbox(check.label, check.enabled, id=f"check-{check.id}"),
-            Horizontal(*row, classes="rule"),
-            classes="check",
-        )
-
-    def _checks(self) -> list[dict] | None:
-        if not self.plugin.default_checks:
-            return None
-        checks = []
-        for check in self.plugin.default_checks:
-            data = check.to_dict()
-            data["enabled"] = self.query_one(f"#check-{check.id}", Checkbox).value
-            data["conditions"] = [
-                [m, op, float(self.query_one(f"#check-{check.id}-{n}", Input).value)]
-                for n, (m, op, _) in enumerate(data["conditions"])
-            ]
-            checks.append(data)
-        return checks
-
     def _add(self) -> None:
         assert self.plugin is not None
         try:
             raw = self.query_one("#interval", Input).value.strip()
             interval = parse_interval(raw) if raw else self.plugin.default_interval
-            rule = None
-            if self.plugin.default_rule:
-                rule = {
-                    "fail_after": int(self.query_one("#rule-fail", Input).value),
-                    "window": int(self.query_one("#rule-window", Input).value),
-                    "recover_after": int(self.query_one("#rule-recover", Input).value),
-                }
-            checks = self._checks()
+            rule = _read_rule(self) if self.plugin.default_rule else None
+            checks = _read_checks(self, self.plugin.default_checks) if self.plugin.default_checks else None
         except ValueError as exc:
             self._error(str(exc) if "interval" in str(exc) else "rule and check values must be numbers")
             return
@@ -374,8 +340,66 @@ class AddSourceScreen(ModalScreen[list[str]]):
     def _title(self, text: str) -> None:
         self.query_one("#title", Static).update(Text(text))
 
-    def _error(self, message: str) -> None:
-        self.query_one("#result", Static).update(Text(f"✗ {message}", style="bold red"))
+    def _fetch_settings(self) -> tuple[dict[str, str], str | None]:
+        return self._manual_values(), None
+
+
+def _check_widgets(checks, metrics) -> list:
+    if not checks:
+        return []
+    by_key = {m.key: m for m in metrics}
+    widgets: list = [Label("Bad check when", classes="field")]
+    for check in checks:
+        row: list = []
+        for n, condition in enumerate(check.conditions):
+            metric = by_key[condition.metric]
+            name = f"{metric.label.lower()}{' per sync' if metric.counter else ''}"
+            row.append(Static(f"{'and ' if n else ''}{name} {condition.op}"))
+            row.append(Input(f"{condition.value:g}", id=f"check-{check.id}-{n}", type="number"))
+        widgets.append(
+            Vertical(Checkbox(check.label, check.enabled, id=f"check-{check.id}"), Horizontal(*row, classes="rule"), classes="check")
+        )
+    return widgets
+
+
+def _read_checks(screen, checks) -> list[dict]:
+    result = []
+    for check in checks:
+        data = check.to_dict()
+        data["enabled"] = screen.query_one(f"#check-{check.id}", Checkbox).value
+        data["conditions"] = [
+            [m, op, float(screen.query_one(f"#check-{check.id}-{n}", Input).value)]
+            for n, (m, op, _) in enumerate(data["conditions"])
+        ]
+        result.append(data)
+    return result
+
+
+def _rule_widgets(rule) -> list:
+    return [
+        Label("Failing when", classes="field"),
+        Horizontal(
+            Input(str(rule.fail_after), id="rule-fail", type="integer"),
+            Static("of the last"),
+            Input(str(rule.window), id="rule-window", type="integer"),
+            Static("checks fail"),
+            classes="rule",
+        ),
+        Label("Recovered after", classes="field"),
+        Horizontal(
+            Input(str(rule.recover_after), id="rule-recover", type="integer"),
+            Static("good checks in a row"),
+            classes="rule",
+        ),
+    ]
+
+
+def _read_rule(screen) -> dict[str, int]:
+    return {
+        "fail_after": int(screen.query_one("#rule-fail", Input).value),
+        "window": int(screen.query_one("#rule-window", Input).value),
+        "recover_after": int(screen.query_one("#rule-recover", Input).value),
+    }
 
 
 def _split(value: str) -> list[str]:
@@ -387,6 +411,132 @@ def _duration(seconds: int) -> str:
         if seconds % size == 0:
             return f"{seconds // size}{unit}"
     return f"{seconds}s"
+
+
+class EditSourceScreen(SourceFields, ModalScreen[bool]):
+    """Everything about a source on one screen. Returns True when saved.
+
+    Identity settings are shown but can't change; secrets are never shown,
+    and leaving one empty keeps the stored value.
+    """
+
+    DEFAULT_CSS = "EditSourceScreen { align: center middle; }\n" + DIALOG_CSS
+    BINDINGS = [("escape", "cancel", "Cancel"), ("ctrl+s", "save", "Save")]
+
+    def __init__(self, core: Core, source_id: str) -> None:
+        super().__init__()
+        self.core = core
+        self.source_id = source_id
+        self.editable = core.editable(source_id)
+        self.plugin = self.editable.plugin
+
+    def compose(self) -> ComposeResult:
+        source, plugin = self.editable.source, self.plugin
+        with VerticalScroll(id="dialog"):
+            yield Static(Text(f"Edit {source.name}"), id="title")
+            with Vertical(id="body"):
+                yield Label("Name *", classes="field")
+                yield Input(source.name, id="name")
+                for setting in plugin.settings:
+                    yield from self._setting_widgets(setting, source.settings.get(setting.key))
+                if source.checks is not None:
+                    yield from _check_widgets(self._checks(), plugin.metrics)
+                if source.rule:
+                    yield from _rule_widgets(Rule.from_dict(source.rule))
+                yield Label("Sync interval", classes="field")
+                yield Input(_duration(source.interval), id="interval", placeholder="seconds, or e.g. 30m, 1h")
+                yield Label("Tags", classes="field")
+                yield Input(", ".join(source.tags), id="tags", placeholder="comma separated, e.g. work, personal")
+            yield Static("", id="result")
+            with Horizontal(id="buttons"):
+                yield Button("Save (ctrl+s)", id="save", variant="primary")
+                yield Button("Cancel", id="cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#name", Input).focus()
+
+    def _setting_widgets(self, setting, value):
+        if setting.key in self.editable.identity:
+            yield Label(setting.label, classes="field")
+            yield Static(Text(f"{value}  (can't change; add a new source instead)", style="dim"))
+            return
+        if setting.choices:
+            yield Label(setting.label, classes="field")
+            chosen = set(value or ())
+            yield SelectionList(*((c.label, c.value, c.value in chosen) for c in setting.choices), id=f"setting-{setting.key}")
+            return
+        yield Label(setting.label + (" *" if setting.required else ""), classes="field")
+        if setting.secret:
+            stored = setting.key in self.editable.stored_secrets
+            field = Input(
+                "" if stored else str(value or ""),
+                id=f"setting-{setting.key}",
+                password=True,
+                placeholder="unchanged; type to replace" if stored else setting.default or "",
+            )
+        else:
+            field = Input(str(value or ""), id=f"setting-{setting.key}", placeholder=setting.default or "")
+        yield Horizontal(field, Button("Fetch", id=f"fetch-{setting.key}"), classes="fetch") if setting.fetch else field
+        if setting.help:
+            yield Static(setting.help, classes="help")
+
+    def _checks(self):
+        return [Check.from_dict(c) for c in self.editable.source.checks or ()]
+
+    def _values(self) -> dict:
+        values: dict = {}
+        for setting in self.plugin.settings:
+            if setting.key in self.editable.identity:
+                continue
+            if setting.choices:
+                values[setting.key] = list(self.query_one(f"#setting-{setting.key}", SelectionList).selected)
+            else:
+                values[setting.key] = self.query_one(f"#setting-{setting.key}", Input).value.strip()
+        return values
+
+    def _fetch_settings(self) -> tuple[dict[str, str], str | None]:
+        return self._values(), self.source_id
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        match event.button.id:
+            case "save":
+                self._save()
+            case "cancel":
+                self.dismiss(False)
+            case str(button) if button.startswith("fetch-"):
+                self.run_worker(self._fetch(button.removeprefix("fetch-")), group="fetch", exclusive=True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+    def action_save(self) -> None:
+        self._save()
+
+    def _save(self) -> None:
+        source = self.editable.source
+        try:
+            raw = self.query_one("#interval", Input).value.strip()
+            interval = parse_interval(raw) if raw else source.interval
+            rule = _read_rule(self) if source.rule else None
+            checks = _read_checks(self, self._checks()) if source.checks is not None else None
+        except ValueError as exc:
+            self._error(str(exc) if "interval" in str(exc) else "rule and check values must be numbers")
+            return
+        tags = tuple(_split(self.query_one("#tags", Input).value))
+        try:
+            self.core.update_source(
+                self.source_id,
+                name=self.query_one("#name", Input).value,
+                settings=self._values(),
+                interval=interval,
+                tags=tags,
+                rule=rule,
+                checks=checks,
+            )
+        except ValueError as exc:
+            self._error(str(exc))
+            return
+        self.dismiss(True)
 
 
 class ConfirmScreen(ModalScreen[bool]):

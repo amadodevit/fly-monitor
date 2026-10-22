@@ -93,6 +93,10 @@ class SecretStore:
 
     def __init__(self, db: sqlite3.Connection) -> None:
         self._db = db
+        # Key names mirrored in memory, so worker threads can ask without touching SQLite.
+        self._names: dict[str, set[str]] = {}
+        for source_id, key in db.execute("SELECT source_id, key FROM keyring_entries"):
+            self._names.setdefault(source_id, set()).add(key)
 
     def available(self) -> bool:
         return _secure(keyring.get_keyring())
@@ -101,8 +105,7 @@ class SecretStore:
         return self.read(source_id, self.keys(source_id))
 
     def keys(self, source_id: str) -> tuple[str, ...]:
-        rows = self._db.execute("SELECT key FROM keyring_entries WHERE source_id = ?", (source_id,))
-        return tuple(key for (key,) in rows)
+        return tuple(sorted(self._names.get(source_id, ())))
 
     def read(self, source_id: str, keys: tuple[str, ...]) -> dict[str, str]:
         """Keyring only, no database, so it can run in a worker thread.
@@ -125,16 +128,25 @@ class SecretStore:
             raise ValueError("No keyring on this machine: use env:VAR or gh:<user>")
         keyring.set_password(KEYRING_SERVICE, _entry(source_id, key), value)
         self._db.execute("INSERT OR IGNORE INTO keyring_entries (source_id, key) VALUES (?, ?)", (source_id, key))
+        self._names.setdefault(source_id, set()).add(key)
+
+    def delete(self, source_id: str, key: str) -> None:
+        try:
+            keyring.delete_password(KEYRING_SERVICE, _entry(source_id, key))
+        except KeyringError:
+            pass  # already gone, or locked: forgetting it here still stops it being used
+        self._db.execute("DELETE FROM keyring_entries WHERE source_id = ? AND key = ?", (source_id, key))
+        self._names.get(source_id, set()).discard(key)
 
     def delete_source(self, source_id: str) -> None:
-        rows = self._db.execute("SELECT key FROM keyring_entries WHERE source_id = ?", (source_id,)).fetchall()
-        for (key,) in rows:
+        for key in self.keys(source_id):
             try:
                 keyring.delete_password(KEYRING_SERVICE, _entry(source_id, key))
             except KeyringError:
                 pass  # already gone, or locked: removing the source must still work
         self._db.execute("DELETE FROM keyring_entries WHERE source_id = ?", (source_id,))
         self._db.execute("DELETE FROM source_secrets WHERE source_id = ?", (source_id,))
+        self._names.pop(source_id, None)
 
 
 def _entry(source_id: str, key: str) -> str:
@@ -209,6 +221,31 @@ class Store:
             )
             for key, value in secret.items():  # a keyring failure rolls the whole insert back
                 self.secrets.put(source.id, key, value)
+
+    def update_source(self, source: SourceConfig, secret_keys: set[str], kept: set[str]) -> None:
+        """Rewrite a source's definition. Secrets in `kept` stay in the keyring untouched;
+        other secret keys get the new value, or leave the keyring when they became references."""
+        secret = {
+            k: str(v) for k, v in source.settings.items() if k in secret_keys and k not in kept and not is_reference(str(v))
+        }
+        public = {k: v for k, v in source.settings.items() if k not in secret}
+        with self._db:
+            self._db.execute(
+                "UPDATE sources SET name = ?, interval = ?, tags = ?, settings = ?, rule = ?, checks = ? WHERE id = ?",
+                (
+                    source.name,
+                    source.interval,
+                    json.dumps(list(source.tags)),
+                    json.dumps(public),
+                    json.dumps(source.rule) if source.rule else None,
+                    json.dumps(source.checks) if source.checks is not None else None,
+                    source.id,
+                ),
+            )
+            for key, value in secret.items():
+                self.secrets.put(source.id, key, value)
+            for key in set(self.secrets.keys(source.id)) - kept - secret.keys():
+                self.secrets.delete(source.id, key)  # now a reference, or no longer set
 
     def remove_source(self, source_id: str) -> None:
         with self._db:

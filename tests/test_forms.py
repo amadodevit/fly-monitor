@@ -1,14 +1,14 @@
 import asyncio
 
 from textual.app import App
-from textual.widgets import Checkbox, Input, OptionList, SelectionList, Static
+from textual.widgets import Button, Checkbox, Input, OptionList, SelectionList, Static
 
 from fly_monitor.core.checks import Check, Condition
 from fly_monitor.core.engine import Core
 from fly_monitor.core.health import Rule
 from fly_monitor.core.plugin import Candidate, Choice, Metric, Setting
 from fly_monitor.core.store import Store
-from fly_monitor.ui.forms import AddSourceScreen
+from fly_monitor.ui.forms import AddSourceScreen, EditSourceScreen
 
 
 class WebPlugin:
@@ -271,3 +271,66 @@ def test_checks_are_editable_and_queues_can_be_fetched():
         ("Backlog", True, [["size", ">", 50.0]]),
         ("Stuck", False, [["size", ">", 0.0], ["dequeued", "=", 0.0]]),
     ]
+
+
+def run_edit(core, source_id, steps):
+    result = {}
+
+    class Host(App):
+        def on_mount(self):
+            self.push_screen(EditSourceScreen(core, source_id), lambda saved: result.setdefault("saved", saved))
+
+    async def run():
+        app = Host()
+        async with app.run_test(size=(100, 60)) as pilot:
+            await pilot.pause()
+            await steps(app, pilot)
+            await pilot.pause()
+
+    asyncio.run(run())
+    return result.get("saved")
+
+
+class BrokerPlugin(QueuePlugin):
+    identity = ("url",)
+    settings = (Setting("url", "URL"), Setting("password", "Password", secret=True), Setting("queues", "Queues", required=False, default="*", fetch=True))
+
+
+def test_edit_screen_is_prefilled_and_saves(fake_keyring):
+    core = Core({"queues": BrokerPlugin()}, Store(":memory:"))
+    sid = core.add_source("queues", "Broker", {"url": "http://broker", "password": "pw", "queues": "orders"}, interval=60)
+
+    async def steps(app, pilot):
+        screen = app.screen
+        assert screen.query_one("#name", Input).value == "Broker"
+        assert not screen.query("#setting-url")  # identity is read-only
+        password = screen.query_one("#setting-password", Input)
+        assert password.value == "" and password.placeholder.startswith("unchanged")
+        assert screen.query_one("#setting-queues", Input).value == "orders"
+        assert screen.query_one("#check-backlog-0", Input).value == "1000"
+        assert screen.query_one("#interval", Input).value == "1m"
+        screen.query_one("#check-backlog-0", Input).value = "10"
+        screen.query_one("#tags", Input).value = "prod"
+        await pilot.click("#fetch-queues")  # uses the stored url and password
+        await wait_for(app, pilot, "#options-queues")
+        screen.query_one("#options-queues", SelectionList).select("billing")
+        await pilot.pause()
+        await pilot.press("ctrl+s")  # Save is below the fold once the picker opens
+
+    assert run_edit(core, sid, steps) is True
+    source = core._all[sid]
+    assert source.checks[0]["conditions"] == [["size", ">", 10.0]]
+    assert source.tags == ("prod",) and source.settings["queues"] == "orders, billing"
+    assert fake_keyring.entries == {("fly-monitor", f"{sid}/password"): "pw"}
+
+
+def test_edit_screen_escape_changes_nothing():
+    core = Core({"web": WebPlugin()}, Store(":memory:"))
+    sid = core.add_source("web", "Site", {"url": "https://example.com"})
+
+    async def steps(app, pilot):
+        app.screen.query_one("#name", Input).value = "Changed"
+        await pilot.press("escape")
+
+    assert run_edit(core, sid, steps) is False
+    assert core._all[sid].name == "Site"

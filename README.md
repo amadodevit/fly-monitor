@@ -3,7 +3,7 @@
 Watch many sources from one terminal. Today: GitHub review requests, comments and mentions across several accounts, website uptime, and ActiveMQ Classic queues.
 
 ```sh
-uv run fly-monitor         # a add · d delete · Enter open/fold · r sync · i ignore · k acknowledge · c close · q quit
+uv run fly-monitor         # a add · e edit · d delete · Enter open/fold · r sync · i ignore · k acknowledge · c close · q quit
 uv run fly-monitor check   # test each source's connection
 uv run pytest
 ```

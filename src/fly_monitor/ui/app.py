@@ -15,7 +15,7 @@ from textual.widgets import DataTable, Footer, Header
 from fly_monitor.core.engine import Core
 from fly_monitor.core.health import FAILING
 from fly_monitor.core.models import HealthView, SourceView, State
-from fly_monitor.ui.forms import AddSourceScreen, ConfirmScreen
+from fly_monitor.ui.forms import AddSourceScreen, ConfirmScreen, EditSourceScreen
 
 TITLE_WIDTH = 70
 
@@ -27,6 +27,7 @@ class FlyMonitorApp(App):
         ("enter", "open", "Open"),
         ("r", "sync", "Sync now"),
         ("a", "add", "Add source"),
+        ("e", "edit", "Edit source"),
         ("d", "delete", "Delete source"),
         ("i", "ignore", "Ignore"),
         ("k", "acknowledge", "Acknowledge"),
@@ -169,6 +170,22 @@ class FlyMonitorApp(App):
                 self.notify(f"Added {', '.join(source_ids)}, syncing")
 
         self.push_screen(AddSourceScreen(self.core), added)
+
+    def action_edit(self) -> None:
+        source_id = self._selected_source()
+        if source_id is None:
+            return
+        try:
+            screen = EditSourceScreen(self.core, source_id)
+        except ValueError as exc:
+            self.notify(str(exc), severity="warning")
+            return
+
+        def saved(yes: bool | None) -> None:
+            if yes:
+                self.notify("Saved. Applies from the next sync.")
+
+        self.push_screen(screen, saved)
 
     def action_delete(self) -> None:
         source_id = self._selected_source()

@@ -307,3 +307,52 @@ def test_add_source_rejects_checks_on_unknown_metrics():
     bad = [{"id": "x", "label": "X", "conditions": [["latency", ">", 1]]}]
     with pytest.raises(ValueError, match="unknown metric"):
         core.add_source("queues", "Broker", {}, checks=bad)
+
+
+class BrokerPlugin(QueuePlugin):
+    identity = ("url",)
+    settings = (Setting("url", "URL"), Setting("password", "Password", secret=True), Setting("queues", "Queues", required=False, default="*"))
+
+
+def test_edit_keeps_history_and_applies_from_next_sync(fake_keyring):
+    plugin, clock = BrokerPlugin(), Clock()
+    core = Core({"queues": plugin}, Store(":memory:"), clock=clock)
+    sid = core.add_source("queues", "Broker", {"url": "http://b", "password": "pw1"})
+
+    def sync(size, dequeued):
+        plugin.values = {"size": size, "dequeued": dequeued}
+        clock.now += 60
+        asyncio.run(core.sync_now())
+        return core.get_state().sources[0]
+
+    sync(5, 10)
+    assert sync(6, 10).health[0].failures == 1  # stuck once
+    checks = core._all[sid].checks
+    checks[0]["conditions"][0][2] = 100  # stuck only above 100 waiting
+    core.update_source(sid, name="Prod broker", settings={"password": "", "queues": "orders"}, interval=120, checks=checks)
+
+    view = sync(7, 10)
+    assert view.name == "Prod broker" and view.interval == 120
+    assert view.health[0].failures == 1  # history kept; the new threshold no longer fires
+    assert core._all[sid].settings == {"url": "http://b", "queues": "orders"}
+    assert fake_keyring.entries == {("fly-monitor", f"{sid}/password"): "pw1"}  # empty kept it
+
+
+def test_edit_replaces_or_releases_secrets_and_refuses_identity(fake_keyring):
+    core = Core({"queues": BrokerPlugin()}, Store(":memory:"))
+    sid = core.add_source("queues", "Broker", {"url": "http://b", "password": "pw1"})
+    core.update_source(sid, name="Broker", settings={"password": "pw2"}, interval=60)
+    assert fake_keyring.entries == {("fly-monitor", f"{sid}/password"): "pw2"}
+    core.update_source(sid, name="Broker", settings={"password": "env:BROKER_PW"}, interval=60)
+    assert fake_keyring.entries == {} and core._all[sid].settings["password"] == "env:BROKER_PW"
+    with pytest.raises(ValueError, match="url can't change"):
+        core.update_source(sid, name="Broker", settings={"url": "http://other"}, interval=60)
+
+
+def test_edit_survives_a_restart(fake_keyring):
+    store = Store(":memory:")
+    core = Core({"queues": BrokerPlugin()}, store)
+    sid = core.add_source("queues", "Broker", {"url": "http://b", "password": "pw"})
+    core.update_source(sid, name="Renamed", settings={"password": ""}, interval=300, tags=("prod",), rule={"window": 5, "fail_after": 2, "recover_after": 2})
+    [reloaded] = store.list_sources()
+    assert (reloaded.name, reloaded.interval, reloaded.tags, reloaded.rule) == ("Renamed", 300, ("prod",), {"window": 5, "fail_after": 2, "recover_after": 2})

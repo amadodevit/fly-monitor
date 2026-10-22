@@ -11,5 +11,6 @@ Changes to the plugin contract are marked **Plugins**.
 - Secrets live in the OS keyring. Older databases are migrated on startup.
 - ActiveMQ Classic source: one row per queue (waiting, consumers, and messages in/out since the last check), queues picked from the broker or by pattern.
 - Checks: rules on a source's numbers, edited in the add-source form.
+- Edit a source in place (`e`): everything but its identity (URL, account). History is kept.
 - **Plugins:** `Metric`, `Check`/`Condition` and `default_checks` for samples plugins; `Setting.fetch` with the `options(ctx, key)` hook.
 - **Plugins:** first version of the contract, see [PLUGINS.md](PLUGINS.md).

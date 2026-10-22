@@ -46,6 +46,16 @@ class PluginInfo:
 
 
 @dataclass(frozen=True)
+class EditableSource:
+    """What the edit screen needs. Secret values are never included."""
+
+    source: SourceConfig  # settings hold no keyring secrets
+    plugin: PluginInfo
+    identity: tuple[str, ...]  # setting keys that can't change
+    stored_secrets: tuple[str, ...]  # secret keys kept in the keyring
+
+
+@dataclass(frozen=True)
 class DetectedSource:
     name: str
     settings: dict[str, Any]
@@ -153,14 +163,7 @@ class Core:
         if not name.strip():
             raise ValueError("name is required")
         settings = self._complete_settings(plugin, settings)
-        stored_rule = stored_checks = None
-        instance = self._plugins[plugin]
-        if _kind(instance) == "samples":
-            default = getattr(instance, "default_rule", Rule())
-            stored_rule = (Rule.from_dict(rule) if rule else default).to_dict()  # validates
-            parsed = [Check.from_dict(c) for c in checks] if checks is not None else list(getattr(instance, "default_checks", ()))
-            checklib.validate(parsed, getattr(instance, "metrics", ()))
-            stored_checks = [c.to_dict() for c in parsed]
+        stored_rule, stored_checks = self._judging(plugin, rule, checks)
         source = SourceConfig(
             id=source_id or self._new_id(name),
             plugin=plugin,
@@ -177,6 +180,62 @@ class Core:
         self._load(source)
         self._bump()
         return source.id
+
+    def editable(self, source_id: str) -> EditableSource:
+        source = self._all[source_id]
+        if source.plugin not in self._plugins:
+            raise ValueError(f"plugin {source.plugin!r} is not installed")
+        [info] = [p for p in self.list_plugins() if p.name == source.plugin]
+        return EditableSource(
+            source=source,
+            plugin=info,
+            identity=tuple(getattr(self._plugins[source.plugin], "identity", ())),
+            stored_secrets=self._store.secrets.keys(source_id),
+        )
+
+    def update_source(
+        self,
+        source_id: str,
+        *,
+        name: str,
+        settings: dict[str, Any],
+        interval: int,
+        tags: tuple[str, ...] = (),
+        rule: dict[str, int] | None = None,
+        checks: list[dict] | None = None,
+    ) -> None:
+        """Change a source in place; its history stays. An empty secret keeps the stored one.
+
+        Identity settings (e.g. a URL) can't change: that would be a different source.
+        """
+        old = self._all[source_id]
+        if old.plugin not in self._plugins:
+            raise ValueError(f"plugin {old.plugin!r} is not installed")
+        if not name.strip():
+            raise ValueError("name is required")
+        for key in getattr(self._plugins[old.plugin], "identity", ()):
+            if key in settings and settings[key] != old.settings.get(key):
+                raise ValueError(f"{key} can't change: add a new source instead")
+        secret_keys = self._secret_keys(old.plugin)
+        stored = set(self._store.secrets.keys(source_id))
+        kept = {k for k in secret_keys & stored if not settings.get(k)}
+        merged = {**old.settings, **{k: v for k, v in settings.items() if k not in kept}}
+        completed = self._complete_settings(old.plugin, {**merged, **{k: "kept" for k in kept}})
+        stored_rule, stored_checks = self._judging(old.plugin, rule, checks if checks is not None else old.checks)
+        source = replace(
+            old,
+            name=name.strip(),
+            interval=interval,
+            tags=tags,
+            settings={k: v for k, v in completed.items() if k not in kept},
+            rule=stored_rule,
+            checks=stored_checks,
+        )
+        self._store.update_source(source, secret_keys, kept)
+        self._all[source_id] = source
+        if source_id in self._sources:
+            self._sources[source_id] = source
+        self._bump()
 
     def remove_source(self, source_id: str) -> None:
         self._store.remove_source(source_id)
@@ -208,11 +267,16 @@ class Core:
             for c in instance.detect()
         )
 
-    def setting_options(self, plugin: str, settings: dict[str, Any], key: str) -> list[str]:
-        """Blocking. Values the user can pick for a Setting with fetch=True, e.g. queue names."""
+    def setting_options(self, plugin: str, settings: dict[str, Any], key: str, source_id: str | None = None) -> list[str]:
+        """Blocking. Values the user can pick for a Setting with fetch=True, e.g. queue names.
+
+        With `source_id` (editing), settings left empty fall back to the stored ones, secrets included.
+        """
         instance = self._plugins[plugin]
         if not hasattr(instance, "options"):
             return []
+        if source_id is not None:
+            settings = {**self._with_secrets(self._all[source_id]), **{k: v for k, v in settings.items() if v}}
         settings = self._complete_settings(plugin, settings)
         with CONNECTIONS[instance.connection]() as conn:
             return list(instance.options(SyncContext(settings=self._resolve(plugin, settings), http=conn), key))
@@ -392,6 +456,17 @@ class Core:
         if missing:
             raise ValueError(f"missing: {', '.join(missing)}")
         return result
+
+    def _judging(self, plugin: str, rule: dict | None, checks: list[dict] | None) -> tuple[dict | None, list[dict] | None]:
+        """Validated rule and checks to store; samples plugins only. None means the plugin's defaults."""
+        instance = self._plugins[plugin]
+        if _kind(instance) != "samples":
+            return None, None
+        default = getattr(instance, "default_rule", Rule())
+        stored_rule = (Rule.from_dict(rule) if rule else default).to_dict()  # validates
+        parsed = [Check.from_dict(c) for c in checks] if checks is not None else list(getattr(instance, "default_checks", ()))
+        checklib.validate(parsed, getattr(instance, "metrics", ()))
+        return stored_rule, [c.to_dict() for c in parsed]
 
     def _secret_keys(self, plugin: str) -> set[str]:
         return {s.key for s in self._plugins[plugin].settings if s.secret}
