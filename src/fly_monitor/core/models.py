@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 
 @dataclass(frozen=True)
@@ -55,6 +55,9 @@ class HealthView:
     checked_at: float
     url: str
     acknowledged: bool = False
+    values: dict = field(default_factory=dict)  # latest raw numbers, keyed by Metric.key
+    growth: dict = field(default_factory=dict)  # counters: growth since the previous check
+    fired: tuple[str, ...] = ()  # labels of the checks firing now
 
 
 @dataclass(frozen=True)
@@ -77,6 +80,8 @@ class SourceView:
     items: tuple[ItemView, ...]
     health: tuple[HealthView, ...] = ()  # for sample-based sources
     ignored: int = 0  # items hidden by the user
+    client: str = ""
+    environment: str = ""
 
 
 @dataclass(frozen=True)

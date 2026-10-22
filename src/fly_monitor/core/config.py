@@ -34,6 +34,8 @@ class SourceConfig:
     settings: dict[str, Any] = field(default_factory=dict)
     rule: dict[str, int] | None = None  # health rule for sample-based sources
     checks: list[dict] | None = None  # sample-based sources: Check.to_dict() each
+    client: str = ""  # who it's for; the default grouping
+    environment: str = ""  # e.g. prod, staging
 
 
 _DURATION = re.compile(r"^(\d+)\s*([smh]?)$")
@@ -68,6 +70,8 @@ def parse_config(data: dict[str, Any]) -> list[SourceConfig]:
                 interval=parse_interval(raw.get("interval", DEFAULT_INTERVAL)),
                 tags=tuple(raw.get("tags", ())),
                 settings=dict(raw.get("settings", {})),
+                client=str(raw.get("client", "")),
+                environment=str(raw.get("environment", "")),
             )
         )
     return sources

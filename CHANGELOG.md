@@ -13,6 +13,9 @@ Changes to the plugin contract are marked **Plugins**.
 - Checks: rules on a source's numbers, edited in the add-source form.
 - Attention first: source headers count failing/acknowledged/ok rows and turn red or orange; failing rows sort first.
 - Recovered notification when a failing row is healthy again.
+- Overview grouped by client › kind (`g` cycles: kind, environment › kind, flat); `-`/`+` fold or unfold one level at a time. Sources get client and environment fields.
+- Each kind gets its own columns (queues: waiting, consumers, in, out); healthy sources take one line.
+- **Plugins:** optional `title`; declared metrics become the columns of your rows.
 - Edit a source in place (`e`): everything but its identity (URL, account). History is kept.
 - **Plugins:** `Metric`, `Check`/`Condition` and `default_checks` for samples plugins; `Setting.fetch` with the `options(ctx, key)` hook.
 - **Plugins:** first version of the contract, see [PLUGINS.md](PLUGINS.md).

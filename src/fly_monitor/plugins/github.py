@@ -26,6 +26,7 @@ WATCH_ALL = ("review_requests", "comments", "mentions")
 
 class GitHubSource:
     name = "github"
+    title = "GitHub"
     connection = "http"
     settings = (
         Setting("account", "GitHub username", help="The login this source watches, e.g. octocat"),

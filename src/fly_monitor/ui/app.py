@@ -4,21 +4,17 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-import time
 import webbrowser
-from datetime import datetime
 
 from rich.text import Text
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.widgets import DataTable, Footer, Header
 
 from fly_monitor.core.engine import Core
-from fly_monitor.core.health import FAILING
-from fly_monitor.core.models import HealthView, SourceView, State
+from fly_monitor.core.models import State
+from fly_monitor.ui import layout
 from fly_monitor.ui.forms import AddSourceScreen, ConfirmScreen, EditSourceScreen
-
-TITLE_WIDTH = 70
-
 
 class FlyMonitorApp(App):
     TITLE = "fly-monitor"
@@ -28,6 +24,10 @@ class FlyMonitorApp(App):
         ("r", "sync", "Sync now"),
         ("a", "add", "Add source"),
         ("e", "edit", "Edit source"),
+        ("g", "grouping", "Group"),
+        ("minus", "fold_level", "Fold level"),
+        ("plus", "unfold_level", "Unfold level"),
+        Binding("equals_sign", "unfold_level", "Unfold level", show=False),  # + without shift
         ("d", "delete", "Delete source"),
         ("i", "ignore", "Ignore"),
         ("k", "acknowledge", "Acknowledge"),
@@ -43,16 +43,17 @@ class FlyMonitorApp(App):
         self._urls: dict[str, str] = {}
         self._rows: dict[str, tuple[str, str, str]] = {}  # row key -> (kind, source id, item id / health key)
         self._last_event = 0
-        self._collapsed: set[str] = set()  # source ids; UI-only, not persisted
+        levels = dict(layout.PRESETS).get(core.preference("grouping"), layout.PRESETS[0][1])
+        self._view = layout.View(levels=levels, depth=len(levels))
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield DataTable(cursor_type="row")
+        yield DataTable(cursor_type="row", show_header=False)
         yield Footer()
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable)
-        table.add_columns("Status", "Title", "Detail", "By", "Updated")
+        table.add_columns(*["" for _ in range(layout.VALUE_COLUMNS + 3)])
         self.run_worker(self.core.run(), group="core")
         self.set_interval(1, self._poll)
         self.set_interval(30, self._redraw)  # keep "3m ago" fresh
@@ -78,49 +79,21 @@ class FlyMonitorApp(App):
         if table.row_count:
             selected = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
 
+        fixed = layout.WIDTHS["name"] + sum(layout.WIDTHS["value"]) + layout.WIDTHS["note"] + 2 * (layout.VALUE_COLUMNS + 3)
+        self._view.title_width = max(20, self.size.width - fixed)
+        plugins = {p.name: p for p in self.core.list_plugins()}
         table.clear()
-        self._urls = {}
-        self._rows = {}
+        self._urls, self._rows = {}, {}
         if not state.sources:
-            table.add_row(Text(" no sources yet ", style="reverse"), Text("press a to add one", style="dim"), "", "", "", key="none")
-        for source in state.sources:
-            collapsed = source.id in self._collapsed
-            arrow = "▸" if collapsed else "▾"
-            table.add_row(
-                Text(f" {arrow} {source.name} ", style=f"bold reverse {_attention(source)}".strip()),
-                _status(source),
-                "",
-                "",
-                "",
-                key=f"hdr:{source.id}",
-            )
-            if collapsed:
-                continue
-            for n, health in enumerate(sorted(source.health, key=_attention_order)):
-                key = f"{source.id}\x1f{health.key}"
-                self._rows[key] = ("health", source.id, health.key)
-                if health.url:
-                    self._urls[key] = health.url
-                table.add_row(*_health_row(health, last=n == len(source.health) - 1), key=key)
-            last = len(source.items) - 1
-            for n, view in enumerate(source.items):
-                item = view.item
-                key = f"{source.id}\x1f{item.id}"
-                self._urls[key] = item.url
-                self._rows[key] = ("item", source.id, item.id)
-                label = Text("  └ " if n == last else "  ├ ", style="dim")
-                label.append("● " if view.is_new else "  ", style="bold yellow")
-                label.append(item.action)
-                table.add_row(
-                    label,
-                    _truncate(item.title),
-                    item.repo,
-                    item.author,
-                    _ago(_parse_iso(item.updated_at)),
-                    key=key,
-                )
-            if not source.items and not source.health and not source.last_error and source.last_sync:
-                table.add_row(Text("  └ ", style="dim"), Text("nothing needs you", style="dim"), "", "", "", key=f"empty:{source.id}")
+            table.add_row(Text(" no sources yet ", style="reverse"), Text("press a to add one", style="dim"), *[""] * (layout.VALUE_COLUMNS + 1), key="none")
+        for row in layout.build(state, plugins, self._view):
+            table.add_row(*row.cells, key=row.key)
+            if row.url:
+                self._urls[row.key] = row.url
+            if row.ref:
+                self._rows[row.key] = ("health" if row.kind in ("health", "source") else row.kind, row.source_id, row.ref)
+            elif row.source_id:
+                self._rows[row.key] = (row.kind, row.source_id, "")
 
         if selected is not None:
             try:
@@ -138,11 +111,20 @@ class FlyMonitorApp(App):
             self._open(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value)
 
     def _open(self, key: str | None) -> None:
-        if key and key.startswith("hdr:"):
-            self._collapsed ^= {key.removeprefix("hdr:")}
+        key = key or ""
+        if key.startswith("grp:"):
+            self._view.folded_groups ^= {key}
             self._redraw()
             return
-        url = self._urls.get(key or "")
+        if key.startswith(("hdr:", "more:")) and key not in self._urls:
+            source_id = key.split(":", 1)[1]
+            source = next((s for s in self.core.get_state().sources if s.id == source_id), None)
+            if source is not None:
+                default = not source.health
+                self._view.expanded[source_id] = not self._view.expanded.get(source_id, default)
+                self._redraw()
+            return
+        url = self._urls.get(key)
         if not url:
             return
         if shutil.which("xdg-open"):
@@ -153,14 +135,8 @@ class FlyMonitorApp(App):
         self.notify(url, title="Opened")
 
     def _selected_source(self) -> str | None:
-        table = self.query_one(DataTable)
-        if not table.row_count:
-            return None
-        key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value or ""
-        for prefix in ("hdr:", "empty:"):
-            if key.startswith(prefix):
-                return key.removeprefix(prefix)
-        return key.split("\x1f", 1)[0] if "\x1f" in key else None
+        row = self._selected_row()
+        return row[1] if row else None
 
     def action_add(self) -> None:
         def added(source_ids: list[str] | None) -> None:
@@ -209,7 +185,7 @@ class FlyMonitorApp(App):
     def _row_action(self, kind: str, action, done: str) -> None:
         row = self._selected_row()
         if row is None or row[0] != kind:
-            self.notify(f"Select a {'GitHub item' if kind == 'item' else 'website'} row first", severity="warning")
+            self.notify(f"Select a {'GitHub item' if kind == 'item' else 'check (queue or website)'} row first", severity="warning")
             return
         try:
             action(row[1], row[2])
@@ -227,80 +203,43 @@ class FlyMonitorApp(App):
     def action_close(self) -> None:
         self._row_action("health", self.core.close, "Closed")
 
+    def action_grouping(self) -> None:
+        names = [name for name, _ in layout.PRESETS]
+        current = next((name for name, levels in layout.PRESETS if levels == self._view.levels), names[0])
+        name = names[(names.index(current) + 1) % len(names)]
+        self._view.levels = dict(layout.PRESETS)[name]
+        self._view.folded_groups.clear()
+        self._view.expanded = {}
+        self._view.depth = len(self._view.levels)
+        self.core.set_preference("grouping", name)
+        self._redraw()
+        self.notify(f"Grouped by {name}")
+
+    def action_fold_level(self) -> None:
+        self._set_depth(self._view.depth - 1)
+
+    def action_unfold_level(self) -> None:
+        self._set_depth(self._view.depth + 1)
+
+    def _set_depth(self, depth: int) -> None:
+        """Show the overview down to `depth`: one grouping level per step, then sources, then everything."""
+        levels = self._view.levels
+        depth = max(0, min(depth, len(levels) + 1))
+        state = self.core.get_state()
+        plugins = {p.name: p for p in self.core.list_plugins()}
+        self._view.depth = depth
+        self._view.folded_groups = {
+            row.key
+            for row in layout.build(state, plugins, layout.View(levels=levels))
+            if row.kind == "group" and row.key.count("\x1f") >= depth  # a group's level is its depth in the path
+        }
+        if depth > len(levels):
+            self._view.expanded = {s.id: True for s in state.sources}
+        else:
+            self._view.expanded = {}  # sources as usual: healthy on one line, problems shown
+        self._redraw()
+        self.notify(layout.depth_name(levels, depth), timeout=2)
+
     def action_sync(self) -> None:
         self.run_worker(self.core.sync_now(), group="sync")
         self.notify("Syncing all sources")
-
-
-def _status(source: SourceView) -> Text:
-    if source.syncing:
-        return Text("syncing…", style="italic")
-    if source.last_error:
-        return Text(f"error: {source.last_error}", style="bold red")
-    if source.last_sync is None:
-        return Text("never synced", style="dim")
-    if source.health:
-        failing = sum(h.state == FAILING and not h.acknowledged for h in source.health)
-        acknowledged = sum(h.acknowledged for h in source.health)
-        ok = len(source.health) - failing - acknowledged
-        text = Text()
-        for count, label, style in ((failing, "failing", "bold red"), (acknowledged, "acknowledged", "bold dark_orange"), (ok, "ok", "dim")):
-            if count:
-                text.append(f"{count} {label}", style=style).append(" · ", style="dim")
-        return text.append(f"checked {_ago(source.last_sync)}", style="dim")
-    count = len(source.items)
-    ignored = f" · {source.ignored} ignored" if source.ignored else ""
-    return Text(f"{count} item{'s' * (count != 1)}{ignored} · synced {_ago(source.last_sync)}", style="dim")
-
-
-def _attention(source: SourceView) -> str:
-    """Header colour: red needs you, orange is in hand, nothing is fine."""
-    if source.last_error or any(h.state == FAILING and not h.acknowledged for h in source.health):
-        return "red"
-    if any(h.acknowledged for h in source.health):
-        return "dark_orange"
-    return ""
-
-
-def _attention_order(health: HealthView) -> tuple[int, str]:
-    """Failing first, then acknowledged or recovered-but-open, then OK."""
-    if health.state == FAILING and not health.acknowledged:
-        return 0, health.key
-    return (1 if health.acknowledged else 2), health.key
-
-
-def _health_row(health: HealthView, *, last: bool) -> tuple:
-    label = Text("  └ " if last else "  ├ ", style="dim")
-    if health.acknowledged:
-        label.append("◐ ACKNOWLEDGED" if health.state == FAILING else "◐ RECOVERED", style="bold dark_orange")
-        note = "you're on it" if health.state == FAILING else "press c to close"
-        detail = Text(f"{health.summary} · {note}", style="dark_orange")
-    elif health.state == FAILING:
-        label.append("✗ FAILING", style="bold red")
-        age = _ago(health.since)
-        detail = Text(f"{health.summary} · failing for {'<1m' if age == 'just now' else age.removesuffix(' ago')}", style="red")
-    else:
-        label.append("✓ OK", style="bold green")
-        detail = Text(f"{health.summary} · {health.failures}/{health.window} failed")
-    return label, _truncate(health.key), detail, "", f"checked {_ago(health.checked_at)}"
-
-
-def _truncate(text: str) -> str:
-    return text if len(text) <= TITLE_WIDTH else text[: TITLE_WIDTH - 1] + "…"
-
-
-def _parse_iso(value: str) -> float | None:
-    try:
-        return datetime.fromisoformat(value).timestamp()
-    except ValueError:
-        return None
-
-
-def _ago(ts: float | None) -> str:
-    if ts is None:
-        return ""
-    seconds = max(0, int(time.time() - ts))
-    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
-        if seconds >= size:
-            return f"{seconds // size}{unit} ago"
-    return "just now"

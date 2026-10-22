@@ -15,6 +15,7 @@ from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
+from textual.suggester import SuggestFromList
 from textual.widgets import Button, Checkbox, Collapsible, Input, Label, OptionList, SelectionList, Static
 from textual.widgets.option_list import Option
 from textual.widgets.selection_list import Selection
@@ -221,6 +222,10 @@ class AddSourceScreen(SourceFields, ModalScreen[list[str]]):
         rule = self.plugin.default_rule
         self._title("What to watch?" if choice_settings else "When is it failing?" if rule else "Almost done")
         widgets: list = []
+        if len(self._chosen) <= 1:  # several detected accounts keep their own names
+            suggested = self._chosen[0].name if self._chosen else self._manual_name() if self._manual is not None else self.plugin.title
+            widgets += [Label("Name *", classes="field"), Input(suggested, id="name", placeholder="e.g. Prod broker")]
+        widgets += _placement_widgets(self.core)
         widgets += _check_widgets(self.plugin.default_checks, self.plugin.metrics)
         if rule:
             widgets += _rule_widgets(rule)
@@ -302,19 +307,23 @@ class AddSourceScreen(SourceFields, ModalScreen[list[str]]):
             for s in self.plugin.settings
             if s.choices
         }
+        names = self.query("#name")
+        typed = names.first(Input).value.strip() if names else ""
         if self._manual is not None:
-            targets = [(self._manual_name(), {**self._manual, **choices})]
+            targets = [(typed or self._manual_name(), {**self._manual, **choices})]
         elif self._chosen:
-            targets = [(c.name, {**c.settings, **choices}) for c in self._chosen]
+            targets = [(typed if len(self._chosen) == 1 and typed else c.name, {**c.settings, **choices}) for c in self._chosen]
         else:
-            targets = [(self.plugin.name, choices)]  # plugin needs no identity at all
+            targets = [(typed or self.plugin.title, choices)]  # plugin needs no identity at all
+        client, environment = _placement(self)
 
         added: list[str] = []
         for name, settings in targets:
             try:
                 added.append(
                     self.core.add_source(
-                        self.plugin.name, name, settings, interval=interval, tags=tags, rule=rule, checks=checks
+                        self.plugin.name, name, settings, interval=interval, tags=tags, rule=rule, checks=checks,
+                        client=client, environment=environment,
                     )
                 )
             except ValueError as exc:
@@ -342,6 +351,25 @@ class AddSourceScreen(SourceFields, ModalScreen[list[str]]):
 
     def _fetch_settings(self) -> tuple[dict[str, str], str | None]:
         return self._manual_values(), None
+
+
+def _placement_widgets(core: Core, client: str = "", environment: str = "") -> list:
+    """Client and environment: what the overview groups by. Suggests values already in use."""
+    sources = core.get_state().sources
+    clients = sorted({s.client for s in sources if s.client})
+    environments = sorted({s.environment for s in sources if s.environment} | {"prod", "staging", "local"})
+    return [
+        Label("Client", classes="field"),
+        Input(client, id="client", placeholder=", ".join(clients) or "e.g. acme, personal",
+              suggester=SuggestFromList(clients, case_sensitive=False)),
+        Label("Environment", classes="field"),
+        Input(environment, id="environment", placeholder="e.g. prod, staging",
+              suggester=SuggestFromList(environments, case_sensitive=False)),
+    ]
+
+
+def _placement(screen) -> tuple[str, str]:
+    return screen.query_one("#client", Input).value.strip(), screen.query_one("#environment", Input).value.strip()
 
 
 def _check_widgets(checks, metrics) -> list:
@@ -437,6 +465,7 @@ class EditSourceScreen(SourceFields, ModalScreen[bool]):
             with Vertical(id="body"):
                 yield Label("Name *", classes="field")
                 yield Input(source.name, id="name")
+                yield from _placement_widgets(self.core, source.client, source.environment)
                 for setting in plugin.settings:
                     yield from self._setting_widgets(setting, source.settings.get(setting.key))
                 if source.checks is not None:
@@ -528,6 +557,8 @@ class EditSourceScreen(SourceFields, ModalScreen[bool]):
                 self.source_id,
                 name=self.query_one("#name", Input).value,
                 settings=self._values(),
+                client=_placement(self)[0],
+                environment=_placement(self)[1],
                 interval=interval,
                 tags=tags,
                 rule=rule,

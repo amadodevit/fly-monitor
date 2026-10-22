@@ -177,12 +177,16 @@ class Store:
             self._db.execute("ALTER TABLE sources ADD COLUMN rule TEXT")
         if "checks" not in columns:  # databases from before checks
             self._db.execute("ALTER TABLE sources ADD COLUMN checks TEXT")
+        for column in ("client", "environment"):  # databases from before grouping
+            if column not in columns:
+                self._db.execute(f"ALTER TABLE sources ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
 
     # -- sources ----------------------------------------------------------------
 
     def list_sources(self) -> list[SourceConfig]:
         rows = self._db.execute(
-            "SELECT id, plugin, name, interval, tags, settings, rule, checks FROM sources ORDER BY position"
+            "SELECT id, plugin, name, interval, tags, settings, rule, checks, client, environment "
+            "FROM sources ORDER BY position"
         ).fetchall()
         return [
             SourceConfig(
@@ -194,8 +198,10 @@ class Store:
                 settings=json.loads(settings),  # secrets stay in the keyring until sync
                 rule=json.loads(rule) if rule else None,
                 checks=json.loads(checks) if checks else None,
+                client=client,
+                environment=environment,
             )
-            for source_id, plugin, name, interval, tags, settings, rule, checks in rows
+            for source_id, plugin, name, interval, tags, settings, rule, checks, client, environment in rows
         ]
 
     def add_source(self, source: SourceConfig, secret_keys: set[str]) -> None:
@@ -205,8 +211,8 @@ class Store:
         with self._db:
             (position,) = self._db.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM sources").fetchone()
             self._db.execute(
-                "INSERT INTO sources (id, plugin, name, interval, tags, settings, position, rule, checks) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO sources (id, plugin, name, interval, tags, settings, position, rule, checks, client, environment) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     source.id,
                     source.plugin,
@@ -217,6 +223,8 @@ class Store:
                     position,
                     json.dumps(source.rule) if source.rule else None,
                     json.dumps(source.checks) if source.checks is not None else None,
+                    source.client,
+                    source.environment,
                 ),
             )
             for key, value in secret.items():  # a keyring failure rolls the whole insert back
@@ -231,7 +239,8 @@ class Store:
         public = {k: v for k, v in source.settings.items() if k not in secret}
         with self._db:
             self._db.execute(
-                "UPDATE sources SET name = ?, interval = ?, tags = ?, settings = ?, rule = ?, checks = ? WHERE id = ?",
+                "UPDATE sources SET name = ?, interval = ?, tags = ?, settings = ?, rule = ?, checks = ?, "
+                "client = ?, environment = ? WHERE id = ?",
                 (
                     source.name,
                     source.interval,
@@ -239,6 +248,8 @@ class Store:
                     json.dumps(public),
                     json.dumps(source.rule) if source.rule else None,
                     json.dumps(source.checks) if source.checks is not None else None,
+                    source.client,
+                    source.environment,
                     source.id,
                 ),
             )
@@ -341,6 +352,16 @@ class Store:
             key: (Sample(key=key, ok=bool(ok), summary=summary, values=json.loads(data), url=url), taken_at)
             for key, ok, summary, data, url, taken_at in rows
         }
+
+    def previous_samples(self, source_id: str) -> dict[str, dict]:
+        """Each row's values from the check before the latest, for growth since then."""
+        rows = self._db.execute(
+            "SELECT key, data FROM samples s WHERE source_id = ? AND taken_at = ("
+            "  SELECT MAX(taken_at) FROM samples p WHERE p.source_id = s.source_id AND p.key = s.key AND p.taken_at < ("
+            "    SELECT MAX(taken_at) FROM samples l WHERE l.source_id = s.source_id AND l.key = s.key))",
+            (source_id,),
+        )
+        return {key: json.loads(data) for key, data in rows}
 
     def record_samples(self, source_id: str, samples: list[Sample], health: dict[str, Health], at: float) -> None:
         """Store this sync's samples and the resulting health. Rows no longer reported are dropped."""

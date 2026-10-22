@@ -26,6 +26,7 @@ _NAME = re.compile(r"destinationName=([^,]+)")
 
 class ActiveMQSource:
     name = "activemq"
+    title = "ActiveMQ queues"
     connection = "http"
     kind = "samples"
     default_interval = 60
@@ -45,7 +46,7 @@ class ActiveMQSource:
         ),
     )
     metrics = (
-        Metric("size", "Messages waiting"),
+        Metric("size", "Messages waiting", short="waiting"),
         Metric("consumers", "Consumers"),
         Metric("enqueued", "Enqueued", counter=True, short="in"),
         Metric("dequeued", "Dequeued", counter=True, short="out"),

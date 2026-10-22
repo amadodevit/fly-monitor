@@ -3,7 +3,7 @@
 Watch many sources from one terminal. Today: GitHub review requests, comments and mentions across several accounts, website uptime, and ActiveMQ Classic queues.
 
 ```sh
-uv run fly-monitor         # a add · e edit · d delete · Enter open/fold · r sync · i ignore · k acknowledge · c close · q quit
+uv run fly-monitor         # a add · e edit · g group · -/+ fold/unfold a level · d delete · Enter open/fold · r sync · i ignore · k acknowledge · c close · q quit
 uv run fly-monitor check   # test each source's connection
 uv run pytest
 ```
@@ -25,6 +25,9 @@ adding the broker. By default a queue is failing after 3 bad checks in a row, sy
 New GitHub items, and websites or queues going failing or recovering, raise a desktop popup (notify-send) and an in-app toast,
 while fly-monitor is open. A source's first sync stays quiet. A source's header turns red while one of its
 rows is failing, even when folded, and failing rows are listed first.
+
+Give each source a client and an environment (`e` to edit). The overview groups by client, then kind;
+press `g` for kind only, environment, or a flat list. Healthy sources take one line.
 
 Want to monitor something else? Write a plugin: see [PLUGINS.md](PLUGINS.md) and the
 example in [`examples/fly-monitor-disk`](examples/fly-monitor-disk).

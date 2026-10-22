@@ -43,6 +43,7 @@ class PluginInfo:
     default_rule: Rule | None  # only for "samples"
     metrics: tuple[Metric, ...] = ()
     default_checks: tuple[Check, ...] = ()
+    title: str = ""  # display name of the kind, e.g. "ActiveMQ queues"
 
 
 @dataclass(frozen=True)
@@ -140,6 +141,7 @@ class Core:
                 default_rule=getattr(p, "default_rule", Rule()) if _kind(p) == "samples" else None,
                 metrics=tuple(getattr(p, "metrics", ())),
                 default_checks=tuple(getattr(p, "default_checks", ())),
+                title=getattr(p, "title", p.name),
             )
             for p in sorted(self._plugins.values(), key=lambda p: p.name)
         )
@@ -155,6 +157,8 @@ class Core:
         source_id: str | None = None,
         rule: dict[str, int] | None = None,
         checks: list[dict] | None = None,
+        client: str = "",
+        environment: str = "",
     ) -> str:
         """Validate, persist and schedule a new source. Returns its id. Raises ValueError.
 
@@ -173,6 +177,8 @@ class Core:
             settings=settings,
             rule=stored_rule,
             checks=stored_checks,
+            client=client.strip(),
+            environment=environment.strip(),
         )
         if source.id in self._all:
             raise ValueError(f"a source with id {source.id!r} already exists")
@@ -203,6 +209,8 @@ class Core:
         tags: tuple[str, ...] = (),
         rule: dict[str, int] | None = None,
         checks: list[dict] | None = None,
+        client: str | None = None,
+        environment: str | None = None,
     ) -> None:
         """Change a source in place; its history stays. An empty secret keeps the stored one.
 
@@ -230,6 +238,8 @@ class Core:
             settings={k: v for k, v in completed.items() if k not in kept},
             rule=stored_rule,
             checks=stored_checks,
+            client=old.client if client is None else client.strip(),
+            environment=old.environment if environment is None else environment.strip(),
         )
         self._store.update_source(source, secret_keys, kept)
         self._all[source_id] = source
@@ -302,9 +312,19 @@ class Core:
         if self._store.get_meta(CONFIG_IMPORTED) or self._all:
             return 0
         for s in sources:
-            self.add_source(s.plugin, s.name, s.settings, interval=s.interval, tags=s.tags, source_id=s.id)
+            self.add_source(
+                s.plugin, s.name, s.settings, interval=s.interval, tags=s.tags, source_id=s.id,
+                client=s.client, environment=s.environment,
+            )
         self._store.set_meta(CONFIG_IMPORTED, str(self._clock()))
         return len(sources)
+
+    def preference(self, key: str, default: str = "") -> str:
+        """UI preferences that survive restarts, e.g. the grouping."""
+        return self._store.get_meta(f"pref:{key}") or default
+
+    def set_preference(self, key: str, value: str) -> None:
+        self._store.set_meta(f"pref:{key}", value)
 
     def source_ids(self) -> list[str]:
         return list(self._all)
@@ -516,6 +536,10 @@ class Core:
             lock = self._locks.get(source.id)
             rule = Rule.from_dict(source.rule)
             health = self._store.health(source.id)
+            plugin = self._plugins.get(source.plugin)
+            metrics = getattr(plugin, "metrics", ())
+            checks = [Check.from_dict(c) for c in source.checks or ()]
+            before = self._store.previous_samples(source.id)
             health_views = tuple(
                 HealthView(
                     key=key,
@@ -527,6 +551,13 @@ class Core:
                     checked_at=taken_at,
                     url=sample.url,
                     acknowledged=health[key].acknowledged,
+                    values=sample.values,
+                    growth={
+                        m.key: g
+                        for m in metrics
+                        if m.counter and (g := checklib.growth(m.key, sample.values, before.get(key))) is not None
+                    },
+                    fired=tuple(checklib.fired(checks, sample.values, before.get(key), metrics)),
                 )
                 for key, (sample, taken_at) in sorted(self._store.latest_samples(source.id).items())
                 if key in health
@@ -544,6 +575,8 @@ class Core:
                     items=tuple(items),
                     health=health_views,
                     ignored=len(ignored & snapshot.keys()),
+                    client=source.client,
+                    environment=source.environment,
                 )
             )
         return State(version=self._version, sources=tuple(views))

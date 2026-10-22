@@ -95,7 +95,7 @@ def growth_summary(values: dict[str, Any], previous: dict[str, Any] | None, metr
     parts = []
     for metric in metrics:
         if metric.counter and (grown := growth(metric.key, values, previous)) is not None:
-            parts.append(f"+{_compact(grown)} {metric.short or metric.label.lower()}")
+            parts.append(f"+{compact(grown)} {metric.short or metric.label.lower()}")
     return " · ".join(parts)
 
 
@@ -114,7 +114,8 @@ def _value(key: str, values: dict[str, Any], previous: dict[str, Any] | None, co
     return current if isinstance(current, int | float) else None
 
 
-def _compact(n: float) -> str:
+def compact(n: float) -> str:
+    """1234 -> "1.2k", 1500000 -> "1.5M"."""
     for size, suffix in ((1_000_000, "M"), (1_000, "k")):
         if abs(n) >= size:
             return f"{n / size:.1f}".rstrip("0").rstrip(".") + suffix

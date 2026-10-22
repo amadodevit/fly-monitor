@@ -91,6 +91,7 @@ default_checks = (
 - A `counter=True` metric is compared by its growth since the previous sync, not its raw value.
   On the first sync, or after a reset (the number went down), counter conditions don't fire.
 - The core also adds each counter's growth to the row, e.g. `+1.2k out`, using `short` (or the label).
+- Your first four metrics are the columns of your rows in the overview, headed by `short` (or the label).
 - Users see your default checks in the add-source form, can untick them and change the numbers.
   They double as examples, so make them sensible.
 
@@ -108,6 +109,7 @@ Add these when they help. The core checks for them with `hasattr`.
 | `test_connection(ctx) -> str` | Powers the Test button and `fly-monitor check`. Return a short description, raise on failure. |
 | `detect() -> list[Candidate]` | Finds sources on this machine (e.g. a logged-in CLI). The wizard shows them first. Return `[]` when nothing is found. |
 | `identity` | Setting keys that identify a source, e.g. `("account",)`. Marks detected candidates that are already added. |
+| `title` | Name of your kind in the overview, e.g. "ActiveMQ queues". Default: `name`. |
 | `default_interval` | Seconds between syncs. Default one hour. |
 | `default_rule` | A `Rule(window, fail_after, recover_after)` for samples. Users can change it when adding. |
 | `metrics`, `default_checks` | Samples only: the numbers you report and the editable checks on them. See above. |

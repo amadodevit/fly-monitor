@@ -9,16 +9,18 @@ from __future__ import annotations
 from fly_monitor.core.connections import Unreachable
 from fly_monitor.core.health import Rule
 from fly_monitor.core.models import Sample
-from fly_monitor.core.plugin import Setting, SyncContext
+from fly_monitor.core.plugin import Metric, Setting, SyncContext
 
 
 class WebsiteSource:
     name = "website"
+    title = "Websites"
     connection = "http"
     kind = "samples"
     default_interval = 300  # 5m
     default_rule = Rule(window=10, fail_after=5, recover_after=3)
     identity = ("url",)
+    metrics = (Metric("status", "Status"), Metric("response_ms", "Response time", short="ms"))
     settings = (
         Setting("url", "URL", help="e.g. https://example.com/health"),
         Setting(

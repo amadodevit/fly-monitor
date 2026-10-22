@@ -15,6 +15,7 @@ from fly_monitor.core.plugin import Setting, SyncContext
 
 class DiskSource:
     name = "disk"
+    title = "Disks"
     connection = "http"  # unused: every plugin must name a core connection for now
     kind = "samples"
     default_interval = 300  # 5m

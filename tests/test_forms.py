@@ -262,10 +262,13 @@ def test_checks_are_editable_and_queues_can_be_fetched():
         await wait_for(app, pilot, "#check-backlog")
         app.screen.query_one("#check-backlog-0", Input).value = "50"
         app.screen.query_one("#check-stuck", Checkbox).value = False
-        await pilot.click("#add")
+        app.screen.query_one("#client", Input).value = "Acme"
+        app.screen.query_one("#name", Input).value = "Prod broker"
+        app.screen.query_one("#add", Button).press()  # below the fold with all the fields
 
     [sid] = run_wizard(core, steps)
     source = core._all[sid]
+    assert (source.name, source.client) == ("Prod broker", "Acme")
     assert source.settings["queues"] == "audit.*, billing"
     assert [(c["label"], c["enabled"], c["conditions"]) for c in source.checks] == [
         ("Backlog", True, [["size", ">", 50.0]]),
