@@ -355,7 +355,7 @@ def panel_core():
     return core, ids
 
 
-def run_panels(core, steps):
+def run_panels(core, steps, size=(100, 60)):
     """Open the panel manager and run `steps(app, pilot)`; return what it dismissed with."""
     result = {}
 
@@ -365,7 +365,7 @@ def run_panels(core, steps):
 
     async def run():
         app = Host()
-        async with app.run_test(size=(100, 60)) as pilot:
+        async with app.run_test(size=size) as pilot:
             await pilot.pause()
             await steps(app, pilot)
             await pilot.pause()
@@ -395,6 +395,21 @@ async def press(app, pilot, button):
 async def highlight(app, pilot, index):
     app.screen.query_one("#panels", OptionList).highlighted = index
     await pilot.pause()
+
+
+def test_panel_manager_fits_a_short_terminal():
+    core, _ = panel_core()
+
+    async def steps(app, pilot):
+        screen = app.screen.region
+        assert screen.contains_region(app.screen.query_one("#save", Button).region)
+        body = app.screen.query_one("#body")
+        assert body.max_scroll_y > 0
+        body.scroll_end(animate=False)
+        await pilot.pause()
+        assert body.region.contains_region(app.screen.query_one("#picks").region)
+
+    run_panels(core, steps, size=(100, 30))
 
 
 def test_panel_manager_creates_a_tag_panel_with_a_live_count():

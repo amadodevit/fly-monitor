@@ -52,7 +52,11 @@ def _values(text: str) -> tuple[str, ...]:
 
 
 class PanelsScreen(ModalScreen[bool]):
+    # The form is taller than most terminals: the dialog takes a fixed height so
+    # #body scrolls inside it and Save/Cancel stay on screen.
     DEFAULT_CSS = "PanelsScreen { align: center middle; }\n" + DIALOG_CSS + """
+PanelsScreen #dialog { height: 90%; }
+PanelsScreen #dialog #body { height: 1fr; }
 #dialog #panel-buttons { height: auto; }
 #dialog #count { margin-top: 1; text-style: bold; }
 """
