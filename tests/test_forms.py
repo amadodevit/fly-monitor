@@ -337,3 +337,234 @@ def test_edit_screen_escape_changes_nothing():
 
     assert run_edit(core, sid, steps) is False
     assert core._all[sid].name == "Site"
+
+
+# -- panel manager ---------------------------------------------------------------
+
+from fly_monitor.core.panels import Panel, PanelFilter, all_panel  # noqa: E402
+from fly_monitor.ui.panels import ListSuggester, PanelsScreen  # noqa: E402
+
+
+def panel_core():
+    core = Core({"web": WebPlugin(), "ghlike": GhLikePlugin()}, Store(":memory:"))
+    ids = {
+        "work": core.add_source("ghlike", "Work", {"account": "work", "token": "gh:work"}, client="acme", environment="prod"),
+        "site": core.add_source("web", "Site", {"url": "https://example.com"}, client="acme", environment="staging"),
+        "blog": core.add_source("web", "Blog", {"url": "https://example.org"}, tags=("personal",)),
+    }
+    return core, ids
+
+
+def run_panels(core, steps):
+    """Open the panel manager and run `steps(app, pilot)`; return what it dismissed with."""
+    result = {}
+
+    class Host(App):
+        def on_mount(self):
+            self.push_screen(PanelsScreen(core), lambda saved: result.setdefault("saved", saved))
+
+    async def run():
+        app = Host()
+        async with app.run_test(size=(100, 60)) as pilot:
+            await pilot.pause()
+            await steps(app, pilot)
+            await pilot.pause()
+
+    asyncio.run(run())
+    return result.get("saved")
+
+
+def count_text(app):
+    return str(app.screen.query_one("#count", Static).render())
+
+
+def panel_names(app):
+    return [str(o.prompt) for o in app.screen.query_one("#panels", OptionList).options]
+
+
+async def type_into(app, pilot, selector, value):
+    app.screen.query_one(selector, Input).value = value
+    await pilot.pause()
+
+
+async def press(app, pilot, button):
+    app.screen.query_one(f"#{button}", Button).press()
+    await pilot.pause()
+
+
+async def highlight(app, pilot, index):
+    app.screen.query_one("#panels", OptionList).highlighted = index
+    await pilot.pause()
+
+
+def test_panel_manager_creates_a_tag_panel_with_a_live_count():
+    core, _ = panel_core()
+
+    async def steps(app, pilot):
+        assert panel_names(app) == ["All"]
+        await press(app, pilot, "new")
+        assert panel_names(app) == ["All", "New panel"]
+        await type_into(app, pilot, "#name", "Personal")
+        assert count_text(app) == "0 sources match"  # no rules yet
+        await type_into(app, pilot, "#tags", " Personal ")
+        assert count_text(app) == "1 source matches"
+        assert panel_names(app) == ["All", "Personal"]
+        await pilot.press("ctrl+s")
+
+    assert run_panels(core, steps) is True
+    assert [(p.name, p.filter) for p in core.panels()] == [("All", PanelFilter()), ("Personal", PanelFilter(tags=("Personal",)))]
+
+
+def test_panel_manager_count_follows_every_rule_field():
+    core, _ = panel_core()
+
+    async def steps(app, pilot):
+        await press(app, pilot, "new")
+        await type_into(app, pilot, "#clients", "acme")
+        assert count_text(app) == "2 sources match"
+        await type_into(app, pilot, "#environments", "prod")
+        assert count_text(app) == "1 source matches"
+        await type_into(app, pilot, "#environments", "prod, staging")
+        assert count_text(app) == "2 sources match"
+        await type_into(app, pilot, "#clients", "")
+        await type_into(app, pilot, "#environments", "")
+        await type_into(app, pilot, "#plugins", "web")
+        assert count_text(app) == "2 sources match"
+        await pilot.press("ctrl+s")
+
+    assert run_panels(core, steps) is True
+    assert core.panels()[1].filter == PanelFilter(plugins=("web",))
+
+
+def test_panel_manager_hand_picks_sources():
+    core, ids = panel_core()
+
+    async def steps(app, pilot):
+        await press(app, pilot, "new")
+        await type_into(app, pilot, "#name", "Morning")
+        picks = app.screen.query_one("#picks", SelectionList)
+        assert sorted(str(o.prompt) for o in picks.options) == ["Blog", "Site", "Work"]
+        picks.select(ids["work"])
+        picks.select(ids["blog"])
+        await pilot.pause()
+        assert count_text(app) == "2 sources match"
+        await pilot.press("ctrl+s")
+
+    assert run_panels(core, steps) is True
+    made = core.panels()[1]
+    assert made.name == "Morning" and set(made.filter.picks) == {ids["work"], ids["blog"]}
+
+
+def test_panel_manager_renames_reorders_and_deletes():
+    core, ids = panel_core()
+    core.save_panels([
+        all_panel(),
+        Panel("p1", "Acme", PanelFilter(clients=("acme",))),
+        Panel("p2", "Personal", PanelFilter(tags=("personal",))),
+        Panel("p3", "Prod", PanelFilter(environments=("prod",))),
+    ])
+
+    async def steps(app, pilot):
+        await highlight(app, pilot, 2)  # Personal
+        await press(app, pilot, "up")
+        assert panel_names(app) == ["All", "Personal", "Acme", "Prod"]
+        await press(app, pilot, "up")  # never above All
+        assert panel_names(app) == ["All", "Personal", "Acme", "Prod"]
+        await highlight(app, pilot, 2)  # Acme
+        assert app.screen.query_one("#clients", Input).value == "acme"  # the editor follows the highlight
+        await type_into(app, pilot, "#name", "Acme Co")
+        await press(app, pilot, "down")
+        assert panel_names(app) == ["All", "Personal", "Prod", "Acme Co"]
+        await highlight(app, pilot, 2)  # Prod
+        await press(app, pilot, "delete")
+        assert panel_names(app) == ["All", "Personal", "Acme Co"]
+        await pilot.press("ctrl+s")
+
+    assert run_panels(core, steps) is True
+    assert [(p.id, p.name) for p in core.panels()] == [("all", "All"), ("p2", "Personal"), ("p1", "Acme Co")]
+    assert sorted(core.source_ids()) == sorted(ids.values())  # deleting a panel never deletes a source
+
+
+def test_panel_manager_cannot_delete_or_filter_all():
+    core, _ = panel_core()
+
+    async def steps(app, pilot):
+        await highlight(app, pilot, 0)
+        assert count_text(app) == "3 sources match"
+        assert app.screen.query_one("#tags", Input).disabled
+        assert app.screen.query_one("#picks", SelectionList).disabled
+        await press(app, pilot, "delete")
+        assert panel_names(app) == ["All"]
+        assert "can't be deleted" in str(app.screen.query_one("#result", Static).render())
+        await pilot.press("ctrl+s")
+
+    assert run_panels(core, steps) is True
+    assert [p.id for p in core.panels()] == ["all"]
+
+
+def test_panel_manager_suggests_values_already_in_use():
+    core, _ = panel_core()
+
+    async def steps(app, pilot):
+        await press(app, pilot, "new")
+        screen = app.screen
+        assert screen.query_one("#clients", Input).placeholder == "acme"
+        assert screen.query_one("#environments", Input).placeholder == "prod, staging"
+        assert screen.query_one("#tags", Input).placeholder == "personal"
+        assert screen.query_one("#plugins", Input).placeholder == "ghlike, web"
+        await pilot.press("escape")
+
+    run_panels(core, steps)
+
+
+def test_panel_list_suggester_completes_the_last_value():
+    suggester = ListSuggester(["acme", "globex"])
+    assert asyncio.run(suggester.get_suggestion("globex, ac")) == "globex, acme"
+    assert asyncio.run(suggester.get_suggestion("AC")) == "acme"
+    assert asyncio.run(suggester.get_suggestion("globex, ")) is None
+
+
+def test_panel_manager_saves_only_through_core_and_escape_changes_nothing():
+    core, _ = panel_core()
+    calls = []
+    real = core.save_panels
+    core.save_panels = lambda panels: (calls.append(panels), real(panels))
+
+    async def cancel(app, pilot):
+        await press(app, pilot, "new")
+        await type_into(app, pilot, "#tags", "personal")
+        await pilot.press("escape")
+
+    async def save(app, pilot):
+        await press(app, pilot, "new")
+        await pilot.press("ctrl+s")
+
+    assert run_panels(core, cancel) is False
+    assert calls == [] and [p.id for p in core.panels()] == ["all"]
+    assert run_panels(core, save) is True
+    assert len(calls) == 1
+
+
+def test_panel_manager_opens_from_the_app_with_p_and_updates_the_tabs():
+    from textual.widgets import Tabs
+
+    from fly_monitor.ui.app import FlyMonitorApp
+
+    core, _ = panel_core()
+
+    async def run():
+        app = FlyMonitorApp(core)
+        app.core.run = lambda: asyncio.sleep(3600)
+        async with app.run_test(size=(160, 60)) as pilot:
+            await pilot.pause(1.2)
+            await pilot.press("p")
+            await pilot.pause(0.2)
+            assert isinstance(app.screen, PanelsScreen)
+            await press(app, pilot, "new")
+            await type_into(app, pilot, "#name", "Personal")
+            await type_into(app, pilot, "#tags", "personal")
+            await pilot.press("ctrl+s")
+            await pilot.pause(0.5)
+            return [str(t.label) for t in app.query_one(Tabs).query("Tab")]
+
+    assert asyncio.run(run()) == ["1 All", "2 Personal", "Notifications"]

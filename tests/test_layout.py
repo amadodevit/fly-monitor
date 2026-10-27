@@ -2,8 +2,9 @@ import time
 
 from fly_monitor.core.engine import PluginInfo
 from fly_monitor.core.models import HealthView, Item, ItemView, SourceView, State
+from fly_monitor.core.panels import Panel, PanelFilter, all_panel
 from fly_monitor.core.plugin import Metric
-from fly_monitor.ui.layout import PRESETS, View, build
+from fly_monitor.ui.layout import PRESETS, View, build, empty_message, filter_from_group, sources_in, tab_failing_count
 
 NOW = 1_000_000.0
 QUEUE_METRICS = (
@@ -32,9 +33,9 @@ def queue(key, state="ok", acknowledged=False, size=0, fired=()):
     )
 
 
-def source(id_, plugin, name, *, health=(), items=(), client="", environment="", error=None):
+def source(id_, plugin, name, *, health=(), items=(), client="", environment="", error=None, tags=()):
     return SourceView(
-        id=id_, plugin=plugin, name=name, tags=(), interval=60, last_sync=NOW - 60, last_error=error,
+        id=id_, plugin=plugin, name=name, tags=tuple(tags), interval=60, last_sync=NOW - 60, last_error=error,
         syncing=False, items=tuple(items), health=tuple(health), client=client, environment=environment,
     )
 
@@ -107,3 +108,81 @@ def test_presets_and_folded_groups():
     assert [r.kind for r in flat] == ["source", "source"]
     folded = build_rows(*sources, view=View(folded_groups={"grp:Acme"}))
     assert [str(r.cells[0]).strip() for r in folded][:2] == ["▸ Acme", "▾ No client"]
+
+
+# -- panels --------------------------------------------------------------------
+
+
+def panel(**rules):
+    return Panel(id="p1", name="P", filter=PanelFilter(**{k: tuple(v) for k, v in rules.items()}))
+
+
+PANEL_SOURCES = (
+    source("a", "github", "work", client="acme", environment="prod"),
+    source("b", "activemq", "broker", health=[queue("q", "failing")], client="globex", environment="prod"),
+    source("c", "website", "blog", tags=("personal",)),
+    source("d", "activemq", "staging broker", health=[queue("q")], client="acme", environment="staging"),
+)
+
+
+def test_panel_sources_in_keeps_order_and_version():
+    state = State(7, PANEL_SOURCES)
+    assert [s.id for s in sources_in(panel(clients=["acme"]), state).sources] == ["a", "d"]
+    assert [s.id for s in sources_in(panel(tags=["personal"], picks=["b"]), state).sources] == ["b", "c"]
+    assert sources_in(panel(clients=["acme"]), state).version == 7
+    assert sources_in(all_panel(), state).sources == PANEL_SOURCES
+
+
+def test_panel_grouping_still_works_on_the_subset():
+    rows = build(sources_in(panel(environments=["prod"]), State(1, PANEL_SOURCES)), PLUGINS, View(), now=lambda: NOW)
+    groups = [str(r.cells[0]).strip() for r in rows if r.kind == "group"]
+    assert groups == ["▾ acme", "▾ GitHub", "▾ globex", "▾ ActiveMQ queues"]
+
+
+def test_panel_tab_failing_count_counts_failing_rows_and_errors_in_the_panel_only():
+    sources = (
+        source("x", "activemq", "broker", client="acme",
+               health=[queue("a", "failing"), queue("b", "failing", acknowledged=True), queue("c")]),
+        source("y", "github", "work", client="acme", error="401 unauthorized"),
+        source("z", "activemq", "other", client="globex", health=[queue("a", "failing")]),
+    )
+    state = State(1, sources)
+    assert tab_failing_count(panel(clients=["acme"]), state) == 2  # one unacknowledged failing row + one error
+    assert tab_failing_count(panel(clients=["globex"]), state) == 1
+    assert tab_failing_count(all_panel(), state) == 3
+    assert tab_failing_count(panel(tags=["nothing"]), state) == 0
+
+
+def test_panel_empty_message_names_the_filter():
+    assert empty_message(panel(clients=["acme"])) == "No sources match client = acme"
+    assert empty_message(panel(clients=["acme", "globex"], environments=["prod"])) == (
+        "No sources match client = acme or globex, environment = prod"
+    )
+    assert empty_message(panel(tags=["personal"], plugins=["website"])) == "No sources match tag = personal, type = website"
+    assert empty_message(panel(picks=["gone"])) == "No sources match 1 hand-picked source"
+    assert empty_message(panel()) == "No sources match: this panel has no rules yet"
+    assert empty_message(all_panel()) == "No sources yet, press a to add one"
+
+
+def test_panel_filter_from_group_header():
+    client_kind = dict(PRESETS)["Client › Kind"]
+    assert filter_from_group("grp:acme", client_kind, PLUGINS) == ("acme", PanelFilter(clients=("acme",)))
+    assert filter_from_group("grp:acme\x1fActiveMQ queues", client_kind, PLUGINS) == (
+        "acme › ActiveMQ queues", PanelFilter(clients=("acme",), plugins=("activemq",)),
+    )
+    assert filter_from_group("grp:prod", dict(PRESETS)["Environment › Kind"], PLUGINS) == ("prod", PanelFilter(environments=("prod",)))
+    assert filter_from_group("grp:Websites", dict(PRESETS)["Kind"], PLUGINS) == ("Websites", PanelFilter(plugins=("website",)))
+    assert filter_from_group("grp:disk", dict(PRESETS)["Kind"], PLUGINS) == ("disk", PanelFilter(plugins=("disk",)))  # unknown plugin: title is its name
+
+
+def test_panel_filter_from_group_refuses_what_a_rule_cannot_express():
+    client_kind = dict(PRESETS)["Client › Kind"]
+    assert filter_from_group("grp:No client", client_kind, PLUGINS) is None
+    assert filter_from_group("hdr:a", client_kind, PLUGINS) is None
+
+
+def test_panel_filter_from_a_real_group_row_matches_its_members():
+    rows = build(State(1, PANEL_SOURCES), PLUGINS, View(), now=lambda: NOW)
+    key = next(r.key for r in rows if r.kind == "group" and str(r.cells[0]).strip() == "▾ acme")
+    _, f = filter_from_group(key, View().levels, PLUGINS)
+    assert [s.id for s in sources_in(Panel("x", "acme", f), State(1, PANEL_SOURCES)).sources] == ["a", "d"]

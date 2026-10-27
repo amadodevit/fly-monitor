@@ -16,6 +16,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from . import checks as checklib
+from . import panels as panellib
 from .checks import Check
 from .config import DEFAULT_INTERVAL, SourceConfig
 from .connections import CONNECTIONS, resolve_secret
@@ -24,6 +25,7 @@ from .health import FAILING, Health, Rule, step
 from .models import HealthView, Item, ItemView, Sample, SourceView, State
 from .notify import FAILING as FAILING_EVENT
 from .notify import NEW_ITEM, RECOVERED, DesktopChannel, Event
+from .panels import Panel
 from .plugin import Metric, Setting, SourcePlugin, SyncContext
 from .store import Store
 
@@ -254,6 +256,7 @@ class Core:
         self._invalid.pop(source_id, None)
         self._locks.pop(source_id, None)
         self._last_attempt.pop(source_id, None)
+        self._drop_from_panels(source_id)
         self._bump()
 
     def detect_sources(self, plugin: str) -> tuple[DetectedSource, ...]:
@@ -325,6 +328,22 @@ class Core:
 
     def set_preference(self, key: str, value: str) -> None:
         self._store.set_meta(f"pref:{key}", value)
+
+    def panels(self) -> list[Panel]:
+        """Saved panels, "All" first. Unreadable or missing data gives just "All"."""
+        return panellib.from_json(self.preference("panels") or None)
+
+    def save_panels(self, panels: list[Panel]) -> None:
+        """Replace the saved panels. "All" is re-added and put first; sources are untouched."""
+        self.set_preference("panels", panellib.to_json(panellib.from_json(panellib.to_json(panels))))
+
+    def active_panel(self) -> str:
+        """Id of the panel last shown, or "All" if it no longer exists."""
+        pid = self.preference("active_panel", panellib.ALL_ID)
+        return pid if any(p.id == pid for p in self.panels()) else panellib.ALL_ID
+
+    def set_active_panel(self, panel_id: str) -> None:
+        self.set_preference("active_panel", panel_id)
 
     def source_ids(self) -> list[str]:
         return list(self._all)
@@ -512,6 +531,18 @@ class Core:
         while candidate in taken:
             candidate, n = f"{base}-{n}", n + 1
         return candidate
+
+    def _drop_from_panels(self, source_id: str) -> None:
+        # Panels stay; only the removed source leaves their hand-picked list.
+        if not self.preference("panels"):
+            return
+        before = self.panels()
+        after = [
+            replace(p, filter=replace(p.filter, picks=tuple(x for x in p.filter.picks if x != source_id)))
+            for p in before
+        ]
+        if after != before:
+            self.save_panels(after)
 
     # -- state ------------------------------------------------------------------
 

@@ -7,6 +7,7 @@ from fly_monitor.core.config import SourceConfig
 from fly_monitor.core.engine import ERROR_RETRY, Core
 from fly_monitor.core.health import Rule
 from fly_monitor.core.models import Item, Sample
+from fly_monitor.core.panels import ALL_ID, Panel, PanelFilter, all_panel
 from fly_monitor.core.plugin import Candidate, Choice, Metric, Setting
 from fly_monitor.core.registry import discover
 from fly_monitor.core.store import Store
@@ -356,3 +357,92 @@ def test_edit_survives_a_restart(fake_keyring):
     core.update_source(sid, name="Renamed", settings={"password": ""}, interval=300, tags=("prod",), rule={"window": 5, "fail_after": 2, "recover_after": 2})
     [reloaded] = store.list_sources()
     assert (reloaded.name, reloaded.interval, reloaded.tags, reloaded.rule) == ("Renamed", 300, ("prod",), {"window": 5, "fail_after": 2, "recover_after": 2})
+
+
+def panel_core():
+    store = Store(":memory:")
+    core = Core({"fake": FakePlugin()}, store)
+    for sid in ("s1", "s2", "s3"):
+        core.add_source("fake", sid, {"account": sid}, source_id=sid)
+    return core, store
+
+
+ACME = Panel("acme", "Acme", PanelFilter(clients=("acme",), picks=("s1", "s2")))
+PERSONAL = Panel("personal", "Personal", PanelFilter(environments=("prod",), picks=("s1",)))
+
+
+def test_fresh_core_has_only_the_all_panel():
+    core, _ = panel_core()
+    assert core.panels() == [all_panel()]
+
+
+def test_saved_panels_round_trip_and_persist():
+    core, store = panel_core()
+    core.save_panels([all_panel(), ACME, PERSONAL])
+    assert core.panels() == [all_panel(), ACME, PERSONAL]
+    assert Core({"fake": FakePlugin()}, store).panels() == [all_panel(), ACME, PERSONAL]
+
+
+def test_all_panel_is_always_present_and_first():
+    core, _ = panel_core()
+    core.save_panels([ACME])
+    assert core.panels() == [all_panel(), ACME]
+    core.save_panels([ACME, all_panel(), PERSONAL])
+    assert core.panels() == [all_panel(), ACME, PERSONAL]
+    core.save_panels([])
+    assert core.panels() == [all_panel()]
+
+
+@pytest.mark.parametrize("stored", ["not json", "", "{}", '{"panels": 3}'])
+def test_unreadable_stored_panels_fall_back_to_all(stored):
+    core, _ = panel_core()
+    core.set_preference("panels", stored)
+    assert core.panels() == [all_panel()]
+
+
+def test_remove_source_drops_it_from_panel_picks_only():
+    core, store = panel_core()
+    core.save_panels([all_panel(), ACME, PERSONAL])
+    core.remove_source("s1")
+    assert core.panels() == [
+        all_panel(),
+        Panel("acme", "Acme", PanelFilter(clients=("acme",), picks=("s2",))),
+        Panel("personal", "Personal", PanelFilter(environments=("prod",))),
+    ]
+    assert core.source_ids() == ["s2", "s3"]
+    assert Core({"fake": FakePlugin()}, store).panels() == core.panels()
+
+
+def test_remove_source_without_saved_panels_leaves_panels_unset():
+    core, _ = panel_core()
+    core.remove_source("s1")
+    assert core.preference("panels") == ""
+    assert core.panels() == [all_panel()]
+
+
+def test_deleting_a_panel_keeps_every_source():
+    core, _ = panel_core()
+    core.save_panels([all_panel(), ACME, PERSONAL])
+    core.save_panels([all_panel(), PERSONAL])
+    assert core.panels() == [all_panel(), PERSONAL]
+    assert core.source_ids() == ["s1", "s2", "s3"]
+    assert {s.id for s in core.get_state().sources} == {"s1", "s2", "s3"}
+
+
+def test_active_panel_persists_and_defaults_to_all():
+    core, store = panel_core()
+    assert core.active_panel() == ALL_ID
+    core.save_panels([all_panel(), ACME])
+    core.set_active_panel("acme")
+    assert core.active_panel() == "acme"
+    assert Core({"fake": FakePlugin()}, store).active_panel() == "acme"
+
+
+def test_stale_active_panel_falls_back_to_all():
+    core, _ = panel_core()
+    core.save_panels([all_panel(), ACME])
+    core.set_active_panel("acme")
+    core.save_panels([all_panel()])
+    assert core.active_panel() == ALL_ID
+    core.set_preference("active_panel", "garbage")
+    assert core.active_panel() == ALL_ID

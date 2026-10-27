@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 from rich.text import Text
@@ -22,6 +22,7 @@ from fly_monitor.core.checks import compact
 from fly_monitor.core.engine import PluginInfo
 from fly_monitor.core.health import FAILING
 from fly_monitor.core.models import HealthView, SourceView, State
+from fly_monitor.core.panels import Panel, PanelFilter, is_all, panel_matches
 
 # (name shown on g, grouping levels outer to inner)
 PRESETS = (
@@ -174,6 +175,55 @@ def _source(rows: list[Row], source: SourceView, depth: int, ctx: _Ctx) -> None:
             values = [Text(_cut(item.repo, WIDTHS["value"][0])), Text(_cut(item.author, WIDTHS["value"][1])), Text(_ago(_iso(item.updated_at), ctx))]
             cells = [label, Text(_cut(item.title, ctx.view.title_width)), *_pad(values), Text("")]
             rows.append(Row(f"{source.id}\x1f{item.id}", cells, "item", source.id, item.id, item.url))
+
+
+# -- panels --------------------------------------------------------------------
+
+# Group level -> PanelFilter field, and the word shown to the user for it.
+PANEL_FIELDS = {"client": "clients", "environment": "environments", "kind": "plugins"}
+RULE_LABELS = (("clients", "client"), ("environments", "environment"), ("tags", "tag"), ("plugins", "type"))
+
+
+def sources_in(panel: Panel, state: State) -> State:
+    """The state as one panel sees it: its sources, in order, same version. Feed it to `build`."""
+    return replace(state, sources=tuple(s for s in state.sources if panel_matches(panel, s)))
+
+
+def tab_failing_count(panel: Panel, state: State) -> int:
+    """Trouble in a panel, for its tab: failing rows nobody acknowledged, plus sources with errors."""
+    sources = sources_in(panel, state).sources
+    failing = sum(h.state == FAILING and not h.acknowledged for s in sources for h in s.health)
+    return failing + sum(bool(s.last_error) for s in sources)
+
+
+def empty_message(panel: Panel) -> str:
+    """What an empty panel says instead of a blank table, e.g. "No sources match client = acme"."""
+    if is_all(panel):
+        return "No sources yet, press a to add one"
+    f = panel.filter
+    parts = [f"{label} = {' or '.join(v.strip() for v in values)}" for name, label in RULE_LABELS if (values := getattr(f, name))]
+    if f.picks:
+        parts.append(f"{len(f.picks)} hand-picked source{'s' if len(f.picks) > 1 else ''}")
+    return "No sources match " + ", ".join(parts) if parts else "No sources match: this panel has no rules yet"
+
+
+def filter_from_group(key: str, levels: tuple[str, ...], plugins: dict[str, PluginInfo]) -> tuple[str, PanelFilter] | None:
+    """Name and filter for a panel made from a group header (P), or None if a rule can't say it.
+
+    "No client" and similar can't: an empty value sets no constraint. Kind groups show the
+    plugin's title, so it is turned back into the plugin name.
+    """
+    if not key.startswith("grp:"):
+        return None
+    path = key.removeprefix("grp:").split("\x1f")
+    rules: dict[str, tuple[str, ...]] = {}
+    for level, value in zip(levels, path, strict=False):
+        if value == UNSET.get(level):
+            return None
+        if level == "kind":
+            value = next((name for name, info in plugins.items() if (info.title or name) == value), value)
+        rules[PANEL_FIELDS[level]] = (value,)
+    return " › ".join(path), PanelFilter(**rules)
 
 
 # -- cells ---------------------------------------------------------------------

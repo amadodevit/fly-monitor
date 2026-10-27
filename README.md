@@ -3,7 +3,7 @@
 Watch many sources from one terminal. Today: GitHub review requests, comments and mentions across several accounts, website uptime, and ActiveMQ Classic queues.
 
 ```sh
-uv run fly-monitor         # a add · e edit · g group · -/+ fold/unfold a level · d delete · Enter open/fold · r sync · i ignore · k acknowledge · c close · q quit
+uv run fly-monitor         # a add · e edit · g group · -/+ fold/unfold a level · d delete · Enter open/fold · r sync · i ignore · k acknowledge · c close · p panels · q quit
 uv run fly-monitor check   # test each source's connection
 uv run pytest
 ```
@@ -31,6 +31,25 @@ press `g` for kind only, environment, or a flat list. Healthy sources take one l
 
 Want to monitor something else? Write a plugin: see [PLUGINS.md](PLUGINS.md) and the
 example in [`examples/fly-monitor-disk`](examples/fly-monitor-disk).
+
+## Panels
+
+Split the overview into tabs, one per client, tag, group or whatever you like. A panel is a saved
+filter: it shows the sources whose client, environment, tag or type is one of the values you give.
+Values in one field are "any of"; different fields must all match, so client `acme` and environment
+`prod` shows acme's prod sources. You can also tick sources by hand; those are always in.
+
+- `p` opens the panel manager: new, rename, reorder, delete, edit the filter. It suggests values
+  already in use and shows how many sources match as you type.
+- `P` on a group header (say the `acme` client) makes a panel for that group in one key.
+- `1`–`9` or `Tab`/`Shift+Tab` switch panels. Each tab shows its failing count, so trouble in a
+  panel you aren't looking at still shows.
+- A new source tagged `personal` turns up in a "Personal" panel by itself, no editing needed.
+- **All** is always first and can't be deleted. Deleting a panel never deletes a source.
+- **Notifications**, the last tab, lists this session's events, newest first. Enter opens one.
+  Toasts and popups still fire for every source, whichever panel is open.
+
+Panels and the last one you opened are kept across restarts.
 
 ## License
 

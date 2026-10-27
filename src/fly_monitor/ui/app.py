@@ -1,25 +1,45 @@
-"""Terminal UI. Reads state from the core; never touches plugins or storage."""
+"""Terminal UI. Reads state from the core; never touches plugins or storage.
+
+Panels are tabs over one overview table: switching a panel only changes which
+sources the table is built from, so grouping, folding and the cursor work the
+same in every panel. The last tab, Notifications, lists this session's events.
+"""
 
 from __future__ import annotations
 
 import shutil
 import subprocess
 import webbrowser
+from datetime import datetime
 
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import DataTable, Footer, Header
+from textual.widgets import DataTable, Footer, Header, Tab, Tabs
 
 from fly_monitor.core.engine import Core
 from fly_monitor.core.models import State
+from fly_monitor.core.notify import FAILING as FAILING_EVENT
+from fly_monitor.core.notify import RECOVERED, Event
+from fly_monitor.core.panels import Panel
 from fly_monitor.ui import layout
 from fly_monitor.ui.forms import AddSourceScreen, ConfirmScreen, EditSourceScreen
+from fly_monitor.ui.panels import PanelsScreen, new_panel_id
+
+NOTIFICATIONS = "tab-notifications"
+EVENT_LABELS = {FAILING_EVENT: Text("failing", style="bold red"), RECOVERED: Text("recovered", style="green")}
+
 
 class FlyMonitorApp(App):
     TITLE = "fly-monitor"
     CSS = "DataTable { height: 1fr; }"
     BINDINGS = [
+        # Priority, or the screen's focus_next takes Tab first; check_action hands Tab back to forms.
+        Binding("tab", "next_panel", "Next panel", show=False, priority=True),
+        Binding("shift+tab", "previous_panel", "Previous panel", show=False, priority=True),
+        *(Binding(str(n), f"panel({n - 1})", f"Panel {n}", show=False) for n in range(1, 10)),
+        ("p", "panels", "Panels"),
+        ("P", "panel_from_group", "Panel from group"),
         ("enter", "open", "Open"),
         ("r", "sync", "Sync now"),
         ("a", "add", "Add source"),
@@ -43,17 +63,26 @@ class FlyMonitorApp(App):
         self._urls: dict[str, str] = {}
         self._rows: dict[str, tuple[str, str, str]] = {}  # row key -> (kind, source id, item id / health key)
         self._last_event = 0
+        self._events: list[Event] = []  # this session's, oldest first; the core keeps the last 200
+        self._event_urls: dict[str, str] = {}
+        self._panels: list[Panel] = core.panels()
+        active = core.active_panel()
+        self._active = next((i for i, p in enumerate(self._panels) if p.id == active), 0)  # index, or -1 for Notifications
         levels = dict(layout.PRESETS).get(core.preference("grouping"), layout.PRESETS[0][1])
         self._view = layout.View(levels=levels, depth=len(levels))
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield DataTable(cursor_type="row", show_header=False)
+        yield Tabs(*self._tabs(), active=self._tab_id(self._active))
+        yield DataTable(id="overview", cursor_type="row", show_header=False)
+        yield DataTable(id="notifications", cursor_type="row", show_header=False)
         yield Footer()
 
     def on_mount(self) -> None:
-        table = self.query_one(DataTable)
-        table.add_columns(*["" for _ in range(layout.VALUE_COLUMNS + 3)])
+        self.query_one(Tabs).can_focus = False  # keys switch panels; the table keeps the cursor
+        self._overview.add_columns(*["" for _ in range(layout.VALUE_COLUMNS + 3)])
+        self._event_table.add_columns("", "", "", "")
+        self._show_active()
         self.run_worker(self.core.run(), group="core")
         self.set_interval(1, self._poll)
         self.set_interval(30, self._redraw)  # keep "3m ago" fresh
@@ -62,10 +91,14 @@ class FlyMonitorApp(App):
             self.notify(self._notice, timeout=10)
 
     def _poll(self) -> None:
-        for event in self.core.events_since(self._last_event):
+        events = self.core.events_since(self._last_event)
+        for event in events:
             self._last_event = event.seq
             failing = event.kind == "failing"
             self.notify(event.body, title=event.title, severity="error" if failing else "information", timeout=8)
+        if events:
+            self._events.extend(events)
+            self._draw_notifications()
         state = self.core.get_state()
         if state.version != self._drawn_version:
             self._draw(state)
@@ -73,8 +106,20 @@ class FlyMonitorApp(App):
     def _redraw(self) -> None:
         self._draw(self.core.get_state())
 
+    @property
+    def _overview(self) -> DataTable:
+        return self.query_one("#overview", DataTable)
+
+    @property
+    def _event_table(self) -> DataTable:
+        return self.query_one("#notifications", DataTable)
+
+    def _panel(self) -> Panel:
+        return self._panels[self._active] if self._active >= 0 else self._panels[0]
+
     def _draw(self, state: State) -> None:
-        table = self.query_one(DataTable)
+        self._draw_tabs(state)
+        table = self._overview
         selected = None
         if table.row_count:
             selected = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
@@ -84,9 +129,12 @@ class FlyMonitorApp(App):
         plugins = {p.name: p for p in self.core.list_plugins()}
         table.clear()
         self._urls, self._rows = {}, {}
+        shown = layout.sources_in(self._panel(), state)
         if not state.sources:
             table.add_row(Text(" no sources yet ", style="reverse"), Text("press a to add one", style="dim"), *[""] * (layout.VALUE_COLUMNS + 1), key="none")
-        for row in layout.build(state, plugins, self._view):
+        elif not shown.sources:
+            table.add_row(Text(f" {self._panel().name} ", style="reverse"), Text(layout.empty_message(self._panel()), style="dim"), *[""] * (layout.VALUE_COLUMNS + 1), key="none")
+        for row in layout.build(shown, plugins, self._view):
             table.add_row(*row.cells, key=row.key)
             if row.url:
                 self._urls[row.key] = row.url
@@ -102,13 +150,137 @@ class FlyMonitorApp(App):
                 pass  # row is gone
         self._drawn_version = state.version
 
+    # -- panels ----------------------------------------------------------------
+
+    def _tab_id(self, index: int) -> str:
+        return NOTIFICATIONS if index < 0 else f"tab-{index}"
+
+    def _tabs(self, state: State | None = None) -> list[Tab]:
+        tabs = [Tab(self._tab_label(i, p, state), id=self._tab_id(i)) for i, p in enumerate(self._panels)]
+        return [*tabs, Tab("Notifications", id=NOTIFICATIONS)]
+
+    def _tab_label(self, index: int, panel: Panel, state: State | None) -> Text:
+        label = Text(f"{index + 1} {panel.name}" if index < 9 else panel.name)
+        failing = layout.tab_failing_count(panel, state) if state else 0
+        if failing:
+            label.append(f" ✗{failing}", style="bold red")  # trouble in a hidden panel stays visible
+        return label
+
+    def _draw_tabs(self, state: State) -> None:
+        tabs = self.query_one(Tabs)
+        for i, panel in enumerate(self._panels):
+            try:
+                tabs.query_one(f"#{self._tab_id(i)}", Tab).label = self._tab_label(i, panel, state)
+            except Exception:
+                pass  # tab is being rebuilt
+
+    def _show_active(self) -> None:
+        on_notifications = self._active < 0
+        self._overview.display = not on_notifications
+        self._event_table.display = on_notifications
+        (self._event_table if on_notifications else self._overview).focus()
+
+    def _switch(self, index: int) -> None:
+        """Show panel `index` (-1 for Notifications) and remember it across restarts."""
+        self._active = index
+        if index >= 0:
+            self.core.set_active_panel(self._panels[index].id)
+            self._view.folded_groups.clear()  # group keys belong to the panel they were folded in
+            self._view.expanded = {}
+        self.query_one(Tabs).active = self._tab_id(index)
+        self._show_active()
+        self._redraw()
+
+    def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
+        tab_id = event.tab.id or ""
+        index = -1 if tab_id == NOTIFICATIONS else int(tab_id.removeprefix("tab-"))
+        if index != self._active:
+            self._switch(index)
+
+    def check_action(self, action: str, parameters: tuple) -> bool | None:
+        if action in ("next_panel", "previous_panel", "panel", "panel_from_group", "panels"):
+            return len(self.screen_stack) == 1  # in a form, Tab moves between fields and keys type
+        return True
+
+    def action_panel(self, index: int) -> None:
+        if index < len(self._panels):
+            self._switch(index)
+
+    def _step(self, by: int) -> None:
+        order = [*range(len(self._panels)), -1]  # Notifications last
+        self._switch(order[(order.index(self._active) + by) % len(order)])
+
+    def action_next_panel(self) -> None:
+        self._step(1)
+
+    def action_previous_panel(self) -> None:
+        self._step(-1)
+
+    async def action_panel_from_group(self) -> None:
+        table = self._overview
+        key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value if table.row_count and self._active >= 0 else ""
+        plugins = {p.name: p for p in self.core.list_plugins()}
+        made = layout.filter_from_group(key or "", self._view.levels, plugins)
+        if made is None:
+            self.notify("Move to a client, environment or kind header first (not a 'No …' one)", severity="warning")
+            return
+        name, panel_filter = made
+        panel_id = new_panel_id(self._panels)
+        self.core.save_panels([*self._panels, Panel(panel_id, name, panel_filter)])
+        await self._reload_panels(panel_id)
+        self.notify(f"Panel '{name}' added")
+
+    def action_panels(self) -> None:
+        current = self._panel().id if self._active >= 0 else None
+
+        async def saved(yes: bool | None) -> None:
+            if yes:
+                await self._reload_panels(current)  # stays on the open panel, or "All" if it was deleted
+
+        self.push_screen(PanelsScreen(self.core), lambda yes: self.call_later(saved, yes))
+
+    async def _reload_panels(self, show: str | None) -> None:
+        """Re-read panels after a save and show panel `show` (None: Notifications)."""
+        self._panels = self.core.panels()
+        index = -1 if show is None else next((i for i, p in enumerate(self._panels) if p.id == show), 0)
+        # A fresh strip, born on the right tab: rebuilding in place re-activates the first tab.
+        await self.query_one(Tabs).remove()
+        tabs = Tabs(*self._tabs(self.core.get_state()), active=self._tab_id(index))
+        tabs.can_focus = False
+        await self.mount(tabs, before=self._overview)
+        self._switch(index)
+
+    # -- notifications -----------------------------------------------------------
+
+    def _draw_notifications(self) -> None:
+        table = self._event_table
+        table.clear()
+        self._event_urls = {}
+        for event in reversed(self._events):
+            key = f"ev:{event.seq}"
+            when = datetime.fromtimestamp(event.at).strftime("%H:%M")
+            kind = EVENT_LABELS.get(event.kind, Text("new", style="yellow"))
+            table.add_row(Text(when, style="dim"), kind, Text(event.body), Text(event.source_name, style="dim"), key=key)
+            if event.url:
+                self._event_urls[key] = event.url
+
+    # -- rows ------------------------------------------------------------------
+
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if event.data_table.id == "notifications":
+            self._browse(self._event_urls.get(event.row_key.value or ""))
+            return
         self._open(event.row_key.value)
 
     def action_open(self) -> None:
-        table = self.query_one(DataTable)
-        if table.row_count:
-            self._open(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value)
+        table = self._event_table if self._active < 0 else self._overview
+        if not table.row_count:
+            return
+        key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+        if self._active < 0:
+            self._browse(self._event_urls.get(key or ""))
+        else:
+            self._open(key)
 
     def _open(self, key: str | None) -> None:
         key = key or ""
@@ -124,7 +296,9 @@ class FlyMonitorApp(App):
                 self._view.expanded[source_id] = not self._view.expanded.get(source_id, default)
                 self._redraw()
             return
-        url = self._urls.get(key)
+        self._browse(self._urls.get(key))
+
+    def _browse(self, url: str | None) -> None:
         if not url:
             return
         if shutil.which("xdg-open"):
@@ -177,8 +351,8 @@ class FlyMonitorApp(App):
         self.push_screen(ConfirmScreen(f"Delete source '{name}' and its history?"), confirmed)
 
     def _selected_row(self) -> tuple[str, str, str] | None:
-        table = self.query_one(DataTable)
-        if not table.row_count:
+        table = self._overview
+        if self._active < 0 or not table.row_count:
             return None
         return self._rows.get(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value or "")
 
@@ -225,7 +399,7 @@ class FlyMonitorApp(App):
         """Show the overview down to `depth`: one grouping level per step, then sources, then everything."""
         levels = self._view.levels
         depth = max(0, min(depth, len(levels) + 1))
-        state = self.core.get_state()
+        state = layout.sources_in(self._panel(), self.core.get_state())
         plugins = {p.name: p for p in self.core.list_plugins()}
         self._view.depth = depth
         self._view.folded_groups = {

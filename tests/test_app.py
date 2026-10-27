@@ -98,3 +98,270 @@ def test_level_names():
         "Showing clients, kinds and sources",
         "Showing everything",
     ]
+
+
+# -- panels and notifications --------------------------------------------------
+
+from textual.widgets import Tabs  # noqa: E402
+
+from fly_monitor.core.notify import DesktopChannel  # noqa: E402
+from fly_monitor.core.panels import Panel, PanelFilter, all_panel  # noqa: E402
+from fly_monitor.ui import layout  # noqa: E402
+from fly_monitor.ui.forms import ConfirmScreen  # noqa: E402
+
+
+class GrowingPlugin:
+    """Reports one more item on every sync, so each sync after the first fires a new-item event."""
+
+    name = "items"
+    connection = "http"
+    settings = (Setting("account", "Account"),)
+
+    def __init__(self):
+        self.count = 0
+
+    def sync(self, ctx):
+        self.count += 1
+        return [
+            Item(id=str(i), action="mentioned", title=f"PR {i}", url=f"https://x/{i}", repo="a/b", author="z", updated_at=str(i))
+            for i in range(1, self.count + 1)
+        ]
+
+
+class BrokenPlugin:
+    name = "broken"
+    connection = "http"
+    settings = (Setting("account", "Account"),)
+
+    def sync(self, ctx):
+        raise RuntimeError("unreachable")
+
+
+def quiet_core(**plugins):
+    return Core(plugins or {"items": ItemsPlugin()}, Store(":memory:"), desktop=DesktopChannel(which=lambda _: None))
+
+
+def three_panels(core):
+    core.save_panels([
+        all_panel(),
+        Panel("p-acme", "Acme", PanelFilter(clients=("acme",))),
+        Panel("p-personal", "Personal", PanelFilter(tags=("personal",))),
+    ])
+
+
+def overview(app):
+    return app.query_one("#overview", DataTable)
+
+
+def row_keys(table):
+    return [table.coordinate_to_cell_key((r, 0)).row_key.value for r in range(table.row_count)]
+
+
+def tab_labels(app):
+    return [str(tab.label) for tab in app.query_one(Tabs).query("Tab")]
+
+
+def start(core, body, size=(160, 30)):
+    async def run():
+        app = FlyMonitorApp(core)
+        app.core.run = lambda: asyncio.sleep(3600)  # no background syncing in these tests
+        async with app.run_test(size=size) as pilot:
+            await pilot.pause(1.2)
+            return await body(app, pilot)
+
+    return asyncio.run(run())
+
+
+def test_panel_first_run_shows_all_and_the_same_rows_as_before():
+    core = quiet_core()
+    sid = core.add_source("items", "Work", {"account": "me"}, client="acme")
+    asyncio.run(core.sync_now(sid))
+
+    async def body(app, pilot):
+        return tab_labels(app), row_keys(overview(app))
+
+    labels, keys = start(core, body)
+    plugins = {p.name: p for p in core.list_plugins()}
+    expected = [r.key for r in layout.build(core.get_state(), plugins, layout.View(levels=layout.PRESETS[0][1], depth=2))]
+    assert [label.split()[-1] for label in labels] == ["All", "Notifications"]
+    assert keys == expected
+
+
+def test_panel_number_keys_and_tab_switch_panels():
+    core = quiet_core()
+    acme = core.add_source("items", "Work", {"account": "a"}, client="acme")
+    home = core.add_source("items", "Home", {"account": "h"}, tags=("personal",))
+    three_panels(core)
+
+    async def body(app, pilot):
+        seen = []
+        for key in ("2", "tab", "shift+tab", "1", "shift+tab"):
+            await pilot.press(key)
+            await pilot.pause(0.2)
+            sources = {v[1] for v in app._rows.values()}
+            seen.append((core.active_panel(), sources, overview(app).display))
+        return seen
+
+    seen = start(core, body)
+    assert seen[0] == ("p-acme", {acme}, True)
+    assert seen[1] == ("p-personal", {home}, True)
+    assert seen[2] == ("p-acme", {acme}, True)
+    assert seen[3] == ("all", {acme, home}, True)
+    assert seen[4][2] is False  # shift+tab from the first tab wraps to Notifications, which hides the overview
+
+
+def test_panel_tab_labels_show_failing_counts():
+    core = quiet_core(items=ItemsPlugin(), broken=BrokenPlugin())
+    core.add_source("items", "Work", {"account": "a"}, client="acme")
+    bad = core.add_source("broken", "Home", {"account": "h"}, tags=("personal",))
+    asyncio.run(core.sync_now(bad))
+    three_panels(core)
+
+    async def body(app, pilot):
+        return tab_labels(app)
+
+    labels = start(core, body)
+    assert labels[0] == "1 All ✗1"
+    assert labels[1] == "2 Acme"
+    assert labels[2] == "3 Personal ✗1"
+
+
+def test_panel_new_source_with_a_matching_tag_shows_up_without_editing_the_panel():
+    core = quiet_core()
+    three_panels(core)
+    core.set_active_panel("p-personal")
+
+    async def body(app, pilot):
+        before = row_keys(overview(app))
+        sid = core.add_source("items", "Blog", {"account": "b"}, tags=("Personal ",))
+        await pilot.pause(1.2)
+        return before, sid, row_keys(overview(app))
+
+    before, sid, after = start(core, body)
+    assert before == ["none"]  # empty panel row
+    assert f"hdr:{sid}" in after
+
+
+def test_panel_empty_panel_says_what_its_filter_is():
+    core = quiet_core()
+    core.add_source("items", "Work", {"account": "a"}, client="globex")
+    three_panels(core)
+    core.set_active_panel("p-acme")
+
+    async def body(app, pilot):
+        return str(overview(app).get_row("none")[0]) + str(overview(app).get_row("none")[1])
+
+    assert "No sources match client = acme" in start(core, body)
+
+
+def test_panel_active_panel_survives_a_restart():
+    core = quiet_core()
+    three_panels(core)
+
+    async def press_three(app, pilot):
+        await pilot.press("3")
+        await pilot.pause(0.2)
+
+    async def read(app, pilot):
+        return app.query_one(Tabs).active, core.active_panel()
+
+    start(core, press_three)
+    active_tab, active = start(core, read)
+    assert active == "p-personal"
+    assert active_tab == "tab-2"
+
+
+def test_panel_capital_p_on_a_client_group_makes_a_panel():
+    core = quiet_core()
+    acme = core.add_source("items", "Work", {"account": "a"}, client="acme")
+    core.add_source("items", "Other", {"account": "o"}, client="globex")
+
+    async def body(app, pilot):
+        table = overview(app)
+        table.move_cursor(row=table.get_row_index("grp:acme"))
+        await pilot.press("P")
+        await pilot.pause(0.2)
+        return tab_labels(app), {v[1] for v in app._rows.values()}
+
+    labels, shown = start(core, body)
+    made = core.panels()[-1]
+    assert (made.name, made.filter) == ("acme", PanelFilter(clients=("acme",)))
+    assert core.active_panel() == made.id
+    assert labels[1] == "2 acme" and labels[-1].endswith("Notifications")
+    assert shown == {acme}
+
+
+def test_panel_capital_p_on_a_no_client_group_warns_and_makes_nothing():
+    core = quiet_core()
+    core.add_source("items", "Work", {"account": "a"})
+
+    async def body(app, pilot):
+        table = overview(app)
+        table.move_cursor(row=table.get_row_index("grp:No client"))
+        await pilot.press("P")
+        await pilot.pause(0.2)
+
+    start(core, body)
+    assert [p.id for p in core.panels()] == ["all"]
+
+
+def test_notifications_tab_lists_events_newest_first_and_enter_opens_the_url(monkeypatch):
+    opened = []
+    monkeypatch.setattr("fly_monitor.ui.app.shutil.which", lambda _: None)
+    monkeypatch.setattr("fly_monitor.ui.app.webbrowser.open", opened.append)
+    core = quiet_core(items=GrowingPlugin())
+    sid = core.add_source("items", "Work", {"account": "a"})
+    for _ in range(3):  # quiet first sync, then PR 2, then PR 3
+        asyncio.run(core.sync_now(sid))
+
+    async def body(app, pilot):
+        await pilot.press("shift+tab")  # from All, wraps to Notifications
+        await pilot.pause(0.2)
+        table = app.query_one("#notifications", DataTable)
+        titles = [str(table.get_row_at(r)[2]) for r in range(table.row_count)]
+        await pilot.press("enter")
+        await pilot.pause(0.2)
+        return table.display, app.focused is table, titles
+
+    shown, focused, titles = start(core, body)
+    assert shown and focused
+    assert titles == ["PR 3", "PR 2"]
+    assert opened == ["https://x/3"]
+
+
+def test_notification_toasts_still_fire_on_any_panel():
+    plugin = GrowingPlugin()
+    core = quiet_core(items=plugin)
+    sid = core.add_source("items", "Work", {"account": "a"}, client="globex")
+    asyncio.run(core.sync_now(sid))
+    three_panels(core)
+    core.set_active_panel("p-acme")  # the source is not in this panel
+
+    async def body(app, pilot):
+        toasts = []
+        original = app.notify
+        app.notify = lambda message, **kw: (toasts.append(message), original(message, **kw))
+        await core.sync_now(sid)
+        await pilot.pause(1.2)
+        return toasts, app.query_one("#notifications", DataTable).row_count
+
+    toasts, rows = start(core, body)
+    assert "PR 2" in toasts
+    assert rows == 1
+
+
+def test_panel_tab_still_moves_focus_inside_a_form():
+    core = quiet_core()
+    three_panels(core)
+
+    async def body(app, pilot):
+        app.push_screen(ConfirmScreen("Delete?"))
+        await pilot.pause(0.2)
+        before = app.focused
+        await pilot.press("tab")
+        await pilot.pause(0.2)
+        return before, app.focused, core.active_panel()
+
+    before, after, active = start(core, body)
+    assert after is not before
+    assert active == "all"
