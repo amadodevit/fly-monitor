@@ -20,6 +20,12 @@ fly-monitor = "fly_monitor.cli:main"
 github = "fly_monitor.plugins.github:GitHubSource"
 website = "fly_monitor.plugins.website:WebsiteSource"
 activemq = "fly_monitor.plugins.activemq:ActiveMQSource"
+feeds = "fly_monitor.plugins.feeds:FeedsSource"
+
+[project.optional-dependencies]
+feeds = [
+    "anthropic>=2.3.0",
+]
 
 [build-system]
 requires = ["hatchling"]

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Notes from Bea</title>
+  <entry>
+    <id>tag:notes.example.org,2026:post-7</id>
+    <title>Agents and code review</title>
+    <link rel="alternate" href="https://notes.example.org/agents-review"/>
+    <published>2026-10-21T12:51:00+02:00</published>
+    <author><name>Bea</name></author>
+    <content type="html">&lt;p&gt;What changes when an agent writes the diff.&lt;/p&gt;</content>
+  </entry>
+</feed>

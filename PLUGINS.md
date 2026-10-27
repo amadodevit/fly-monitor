@@ -117,8 +117,14 @@ Add these when they help. The core checks for them with `hasattr`.
 
 ## Connections and secrets
 
-`connection` names a client the core provides. Today there is one, `"http"`
-(`ctx.http.get_json(url, headers=..., params=...)` and `ctx.http.probe(url, timeout=...)`).
+`connection` names a client the core provides. Today there is one, `"http"`:
+
+- `ctx.http.get_json(url, headers=..., params=...)` returns parsed JSON.
+- `ctx.http.get(url, headers=..., params=...)` returns the `httpx.Response` (`.status_code`,
+  `.headers`, `.content`, `.text`) for bodies that aren't JSON, such as XML. It follows redirects
+  and raises on 4xx/5xx; a `304 Not Modified` comes back as a response, so conditional GETs work.
+- `ctx.http.probe(url, timeout=...)` returns `(status, response_ms)` without following redirects.
+
 A plugin that needs no network still names `"http"` and ignores it.
 If you need another kind, open an issue: the core should own it, not each plugin.
 
@@ -129,6 +135,19 @@ Users can type a reference instead of the secret:
 - `env:VAR` reads an environment variable.
 
 Never log or return a secret in a summary or error message.
+
+## Memory and warnings
+
+`ctx.memory` is a dict the core keeps for each source between syncs. Change it in place, for
+example to remember an ETag or which posts you have already seen. The core saves it only when
+`sync` returns; if `sync` raises, the next sync gets the memory from before. Keep it to plain
+JSON data (dicts, lists, strings, numbers) and small. Never put a secret in it.
+
+`ctx.warnings` is a list you append short messages to when part of a sync failed but the rest is
+worth showing, e.g. `"feeds.example.com: timeout"` when one feed of five is down. They show on the
+source's row until the next sync without warnings. If nothing useful came back, raise instead.
+
+Both default to empty, so plugins that don't use them need no change.
 
 ## Testing
 

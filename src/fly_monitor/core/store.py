@@ -1,4 +1,8 @@
-"""On-disk state: sources, their secrets, and the last snapshot per source."""
+"""On-disk state: sources, their secrets, and the last snapshot per source.
+
+Also each source's plugin memory (SyncContext.memory): plain JSON a plugin keeps
+between syncs, such as which posts it has already seen. Never secrets.
+"""
 
 from __future__ import annotations
 
@@ -46,7 +50,13 @@ CREATE TABLE IF NOT EXISTS keyring_entries (
 CREATE TABLE IF NOT EXISTS source_state (
     source_id  TEXT PRIMARY KEY,
     last_sync  REAL,
-    last_error TEXT
+    last_error TEXT,
+    warnings   TEXT  -- JSON list from the last successful sync; NULL when none
+);
+-- SyncContext.memory per source, saved after each successful sync.
+CREATE TABLE IF NOT EXISTS source_memory (
+    source_id TEXT PRIMARY KEY,
+    data      TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS items (
     source_id  TEXT NOT NULL,
@@ -180,6 +190,10 @@ class Store:
         for column in ("client", "environment"):  # databases from before grouping
             if column not in columns:
                 self._db.execute(f"ALTER TABLE sources ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
+        state_columns = {row[1] for row in self._db.execute("PRAGMA table_info(source_state)")}
+        if "warnings" not in state_columns:  # databases from before sync warnings
+            self._db.execute("ALTER TABLE source_state ADD COLUMN warnings TEXT")
+        # source_memory is a new table, so SCHEMA's CREATE IF NOT EXISTS already added it.
 
     # -- sources ----------------------------------------------------------------
 
@@ -267,6 +281,7 @@ class Store:
                 ("samples", "source_id"),
                 ("health", "source_id"),
                 ("ignored", "source_id"),
+                ("source_memory", "source_id"),
             ):
                 self._db.execute(f"DELETE FROM {table} WHERE {column} = ?", (source_id,))
             self.secrets.delete_source(source_id)
@@ -328,7 +343,25 @@ class Store:
         ).fetchone()
         return (row[0], row[1]) if row else (None, None)
 
-    def replace_snapshot(self, source_id: str, items: dict[str, tuple[Item, float]], synced_at: float) -> None:
+    def memory(self, source_id: str) -> dict:
+        """The plugin memory saved after the last successful sync; {} before the first."""
+        row = self._db.execute("SELECT data FROM source_memory WHERE source_id = ?", (source_id,)).fetchone()
+        return json.loads(row[0]) if row else {}
+
+    def warnings(self, source_id: str) -> tuple[str, ...]:
+        row = self._db.execute("SELECT warnings FROM source_state WHERE source_id = ?", (source_id,)).fetchone()
+        return tuple(json.loads(row[0])) if row and row[0] else ()
+
+    def replace_snapshot(
+        self,
+        source_id: str,
+        items: dict[str, tuple[Item, float]],
+        synced_at: float,
+        *,
+        memory: dict | None = None,
+        warnings: tuple[str, ...] = (),
+    ) -> None:
+        """`memory` None leaves the stored memory as it is."""
         with self._db:
             self._db.execute("DELETE FROM items WHERE source_id = ?", (source_id,))
             self._db.executemany(
@@ -336,6 +369,7 @@ class Store:
                 [(source_id, i, json.dumps(item.to_dict()), first) for i, (item, first) in items.items()],
             )
             self._set_state(source_id, synced_at, None)
+            self._save_sync_extras(source_id, memory, warnings)
 
     # -- samples and health -----------------------------------------------------
 
@@ -363,7 +397,16 @@ class Store:
         )
         return {key: json.loads(data) for key, data in rows}
 
-    def record_samples(self, source_id: str, samples: list[Sample], health: dict[str, Health], at: float) -> None:
+    def record_samples(
+        self,
+        source_id: str,
+        samples: list[Sample],
+        health: dict[str, Health],
+        at: float,
+        *,
+        memory: dict | None = None,
+        warnings: tuple[str, ...] = (),
+    ) -> None:
         """Store this sync's samples and the resulting health. Rows no longer reported are dropped."""
         with self._db:
             self._db.executemany(
@@ -385,6 +428,7 @@ class Store:
                 [(source_id, key, json.dumps(h.to_dict())) for key, h in health.items()],
             )
             self._set_state(source_id, at, None)
+            self._save_sync_extras(source_id, memory, warnings)
 
     def set_health(self, source_id: str, key: str, health: Health) -> None:
         with self._db:
@@ -420,6 +464,23 @@ class Store:
             "ON CONFLICT(source_id) DO UPDATE SET last_sync = excluded.last_sync, last_error = excluded.last_error",
             (source_id, last_sync, error),
         )
+
+    def _save_sync_extras(self, source_id: str, memory: dict | None, warnings: tuple[str, ...]) -> None:
+        """Part of a successful sync's transaction, so memory never runs ahead of the snapshot."""
+        self._db.execute(
+            "UPDATE source_state SET warnings = ? WHERE source_id = ?",
+            (json.dumps(list(warnings)) if warnings else None, source_id),
+        )
+        if memory is None:
+            return
+        if memory:
+            self._db.execute(
+                "INSERT INTO source_memory (source_id, data) VALUES (?, ?) "
+                "ON CONFLICT(source_id) DO UPDATE SET data = excluded.data",
+                (source_id, json.dumps(memory)),
+            )
+        else:
+            self._db.execute("DELETE FROM source_memory WHERE source_id = ?", (source_id,))
 
     def close(self) -> None:
         self._db.close()

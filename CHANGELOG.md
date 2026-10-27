@@ -20,4 +20,5 @@ Changes to the plugin contract are marked **Plugins**.
 - **Plugins:** optional `title`; declared metrics become the columns of your rows.
 - Edit a source in place (`e`): everything but its identity (URL, account). History is kept.
 - **Plugins:** `Metric`, `Check`/`Condition` and `default_checks` for samples plugins; `Setting.fetch` with the `options(ctx, key)` hook.
+- **Plugins:** `SyncContext.memory` (per-source state the core keeps between successful syncs), `SyncContext.warnings` (partial failures shown on the source row) and `ctx.http.get` (raw response, for XML and conditional GETs). All additive: existing plugins need no change.
 - **Plugins:** first version of the contract, see [PLUGINS.md](PLUGINS.md).

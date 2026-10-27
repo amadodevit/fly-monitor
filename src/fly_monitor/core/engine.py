@@ -8,6 +8,7 @@ or storage.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 from collections import deque
@@ -383,8 +384,11 @@ class Core:
             self._bump()
             self._last_attempt[source_id] = self._clock()
             source = self._sources[source_id]
+            memory = self._store.memory(source_id)  # fresh copy: a failed sync's changes are dropped
             try:
-                items = await asyncio.to_thread(self._fetch, source, self._store.secrets.keys(source_id))
+                items, warnings = await asyncio.to_thread(
+                    self._fetch, source, self._store.secrets.keys(source_id), memory
+                )
             except Exception as exc:  # a broken source must not take the core down
                 if source_id in self._sources:
                     self._store.record_error(source_id, _describe(exc))
@@ -393,23 +397,34 @@ class Core:
                 if source_id not in self._sources:
                     return None  # removed while syncing
                 if _kind(self._plugins[source.plugin]) == "samples":
-                    events = self._apply_samples(source, items)
+                    events = self._apply_samples(source, items, memory, warnings)
                 else:
-                    events = self._apply(source, items)
+                    events = self._apply(source, items, memory, warnings)
             finally:
                 self._bump()
         if events:
             await asyncio.to_thread(self._desktop.send, events)
 
-    def _fetch(self, source: SourceConfig, secret_keys: tuple[str, ...]) -> list[Item] | list[Sample]:
-        """Runs in a worker thread: no database access here."""
+    def _fetch(
+        self, source: SourceConfig, secret_keys: tuple[str, ...], memory: dict
+    ) -> tuple[list[Item] | list[Sample], tuple[str, ...]]:
+        """Runs in a worker thread: no database access here. The plugin changes `memory` in place."""
         plugin = self._plugins[source.plugin]
         settings = {**source.settings, **self._store.secrets.read(source.id, secret_keys)}
         with CONNECTIONS[plugin.connection]() as conn:
             settings = self._resolve(source.plugin, settings)
-            return plugin.sync(SyncContext(settings=settings, http=conn))
+            ctx = SyncContext(settings=settings, http=conn, memory=memory)
+            result = plugin.sync(ctx)
+        try:
+            json.dumps(ctx.memory)
+        except (TypeError, ValueError):
+            raise RuntimeError("plugin memory is not plain JSON data") from None
+        if ctx.memory is not memory:  # replaced rather than changed in place
+            memory.clear()
+            memory.update(ctx.memory)
+        return result, tuple(str(w) for w in ctx.warnings)
 
-    def _apply(self, source: SourceConfig, items: list[Item]) -> list[Event]:
+    def _apply(self, source: SourceConfig, items: list[Item], memory: dict, warnings: tuple[str, ...]) -> list[Event]:
         now = self._clock()
         first_sync = self._store.source_state(source.id)[0] is None
         previous = self._store.snapshot(source.id)
@@ -417,7 +432,7 @@ class Core:
         kept: dict[str, tuple[Item, float]] = {i.id: (i, now) for i in diff.new}
         for item in diff.updated + diff.unchanged:
             kept[item.id] = (item, previous[item.id][1])
-        self._store.replace_snapshot(source.id, kept, now)
+        self._store.replace_snapshot(source.id, kept, now, memory=memory, warnings=warnings)
         self._store.forget_ignored_except(source.id, set(kept))
         if first_sync:
             return []  # adding a source shouldn't announce everything it already had
@@ -426,7 +441,9 @@ class Core:
             for item in diff.new
         ]
 
-    def _apply_samples(self, source: SourceConfig, samples: list[Sample]) -> list[Event]:
+    def _apply_samples(
+        self, source: SourceConfig, samples: list[Sample], memory: dict, warnings: tuple[str, ...]
+    ) -> list[Event]:
         now = self._clock()
         rule = Rule.from_dict(source.rule)
         previous = self._store.health(source.id)
@@ -436,7 +453,7 @@ class Core:
             if sample.key not in latest:  # one result per row per sync
                 latest[sample.key] = self._judge(source, sample, before.get(sample.key))
         health = {key: step(previous.get(key), sample.ok, now, rule) for key, sample in latest.items()}
-        self._store.record_samples(source.id, list(latest.values()), health, now)
+        self._store.record_samples(source.id, list(latest.values()), health, now, memory=memory, warnings=warnings)
         events = []
         for key, h in health.items():
             was = previous.get(key)
@@ -602,6 +619,7 @@ class Core:
                     interval=source.interval,
                     last_sync=last_sync,
                     last_error=self._invalid.get(source.id, last_error),
+                    warnings=self._store.warnings(source.id),
                     syncing=bool(lock and lock.locked()),
                     items=tuple(items),
                     health=health_views,

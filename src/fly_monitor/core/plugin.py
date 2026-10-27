@@ -60,9 +60,22 @@ class Candidate:
 
 @dataclass
 class SyncContext:
+    """What a plugin gets on each call.
+
+    `memory` is the plugin's own state for this source, kept by the core between
+    syncs: change it in place. The core saves it only after a sync that returns;
+    if sync raises, the next sync starts from the memory before. It must stay
+    JSON-friendly (dicts, lists, strings, numbers) and never hold secrets.
+
+    `warnings` are partial failures worth showing without failing the sync,
+    e.g. one feed out of five unreachable. Short, plain English, no secrets.
+    """
+
     settings: dict[str, Any]
     http: HttpConnection
     extra: dict[str, Any] = field(default_factory=dict)
+    memory: dict[str, Any] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
 
 
 @runtime_checkable

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Example Engineering</title>
+    <link>https://blog.example.com/</link>
+    <item>
+      <title>Retries without &lt;b&gt;tears&lt;/b&gt;</title>
+      <link>https://blog.example.com/retries/</link>
+      <guid>https://blog.example.com/retries/</guid>
+      <pubDate>Sat, 24 Oct 2026 15:00:00 -0300</pubDate>
+      <dc:creator>Ana</dc:creator>
+      <description>&lt;p&gt;How we stopped &lt;em&gt;retry storms&lt;/em&gt; in our queue consumers.&lt;/p&gt;</description>
+    </item>
+    <item>
+      <title>Our office plants</title>
+      <link>https://blog.example.com/plants/</link>
+      <guid>https://blog.example.com/plants/</guid>
+      <pubDate>Thu, 22 Oct 2026 10:00:00 +0000</pubDate>
+      <description>A tour of the ferns.</description>
+    </item>
+  </channel>
+</rss>

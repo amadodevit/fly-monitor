@@ -89,6 +89,51 @@ def test_failed_sync_keeps_items_and_reports_error(setup):
     assert [v.item.id for v in source.items] == ["a"]
 
 
+class RememberingPlugin(FakePlugin):
+    """Counts its syncs in memory and warns about what it skipped."""
+
+    def __init__(self):
+        super().__init__()
+        self.seen_memory = []
+
+    def sync(self, ctx):
+        self.seen_memory.append(dict(ctx.memory))
+        ctx.memory["syncs"] = ctx.memory.get("syncs", 0) + 1
+        if self.fail:
+            raise RuntimeError("boom")
+        ctx.warnings.extend(self.next)
+        return []
+
+
+def test_memory_persists_between_syncs_and_a_failed_sync_leaves_it_untouched(tmp_path):
+    plugin, clock = RememberingPlugin(), Clock()
+    core = Core({"fake": plugin}, Store(tmp_path / "state.db"), clock=clock)
+    core.add_source("fake", "S1", {"account": "me"}, source_id="s1")
+    asyncio.run(core.sync_now())
+    plugin.fail = True
+    asyncio.run(core.sync_now())
+    plugin.fail = False
+    asyncio.run(core.sync_now())
+    assert plugin.seen_memory == [{}, {"syncs": 1}, {"syncs": 1}]
+
+    restarted = Core({"fake": plugin}, Store(tmp_path / "state.db"), clock=clock)
+    asyncio.run(restarted.sync_now())
+    assert plugin.seen_memory[-1] == {"syncs": 2}
+
+
+def test_warnings_show_on_the_source_until_a_clean_sync():
+    plugin = RememberingPlugin()
+    core = Core({"fake": plugin}, Store(":memory:"), clock=Clock())
+    core.add_source("fake", "S1", {"account": "me"}, source_id="s1")
+    plugin.next = ["feeds.example.com: timeout"]
+    asyncio.run(core.sync_now())
+    source = core.get_state().sources[0]
+    assert source.warnings == ("feeds.example.com: timeout",) and source.last_error is None
+    plugin.next = []
+    asyncio.run(core.sync_now())
+    assert core.get_state().sources[0].warnings == ()
+
+
 def test_due_respects_interval_and_error_retry(setup):
     core, plugin, clock = setup
     assert core._is_due("s1")  # never synced

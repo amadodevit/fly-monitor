@@ -82,6 +82,7 @@ class SourceView:
     ignored: int = 0  # items hidden by the user
     client: str = ""
     environment: str = ""
+    warnings: tuple[str, ...] = ()  # partial failures from the last successful sync, not an error
 
 
 @dataclass(frozen=True)

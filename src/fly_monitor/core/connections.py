@@ -27,6 +27,17 @@ class HttpConnection:
         response.raise_for_status()
         return response.json()
 
+    def get(self, url: str, *, headers: dict[str, str] | None = None, params: dict[str, Any] | None = None) -> httpx.Response:
+        """GET following redirects, for bodies that aren't JSON (XML, HTML).
+
+        Raises httpx.HTTPStatusError on 4xx/5xx. Other statuses come back as is,
+        so a 304 answering If-None-Match / If-Modified-Since is not an error.
+        """
+        response = self._client.get(url, headers=headers, params=params, follow_redirects=True)
+        if response.status_code >= 400:
+            response.raise_for_status()
+        return response
+
     def probe(self, url: str, *, timeout: float) -> tuple[int, int]:
         """GET without following redirects. Returns (status, response_ms) or raises Unreachable."""
         started = time.perf_counter()

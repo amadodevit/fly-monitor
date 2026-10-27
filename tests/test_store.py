@@ -91,3 +91,36 @@ def test_db_file_is_owner_only(tmp_path):
     path = tmp_path / "state.db"
     Store(path)
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_store_migrates_databases_from_before_memory_and_warnings(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    db = sqlite3.connect(path)
+    db.execute("CREATE TABLE source_state (source_id TEXT PRIMARY KEY, last_sync REAL, last_error TEXT)")
+    db.execute("INSERT INTO source_state VALUES ('s', 1000.0, NULL)")
+    db.commit()
+    db.close()
+    store = Store(path)
+    assert store.source_state("s") == (1000.0, None)
+    assert store.warnings("s") == () and store.memory("s") == {}
+    store.replace_snapshot("s", {}, 2000.0, memory={"seen": ["a"]}, warnings=("one feed down",))
+    assert store.warnings("s") == ("one feed down",)
+    assert store.memory("s") == {"seen": ["a"]}
+
+
+def test_memory_round_trips_and_goes_with_the_source(tmp_path):
+    store = Store(tmp_path / "state.db")
+    store.add_source(SourceConfig(id="s", plugin="p", name="S", settings={}), set())
+    store.replace_snapshot("s", {}, 1000.0, memory={"feeds": {"u": {"etag": "x"}}})
+    store.replace_snapshot("s", {}, 2000.0)  # no memory given: kept as is
+    store.close()
+    store = Store(tmp_path / "state.db")
+    assert store.memory("s") == {"feeds": {"u": {"etag": "x"}}}
+    assert store.warnings("s") == ()  # a clean sync clears them
+    store.replace_snapshot("s", {}, 3000.0, memory={})
+    assert store.memory("s") == {}
+    store.replace_snapshot("s", {}, 4000.0, memory={"n": 1})
+    store.remove_source("s")
+    assert store.memory("s") == {}

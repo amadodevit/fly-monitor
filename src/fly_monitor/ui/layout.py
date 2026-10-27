@@ -290,6 +290,8 @@ def _source_note(source: SourceView, ctx: _Ctx) -> Text:
         return Text("syncing…", style="italic dim")
     if source.last_error:
         return Text(_cut(f"error: {source.last_error}", WIDTHS["note"]), style="bold red")
+    if source.warnings:
+        return Text(_cut(f"warning: {'; '.join(source.warnings)}", WIDTHS["note"]), style="yellow")
     if source.last_sync is None:
         return Text("never synced", style="dim")
     verb = "checked" if source.health else "synced"
