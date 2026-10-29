@@ -80,6 +80,7 @@ class FlyMonitorApp(App):
 
     def on_mount(self) -> None:
         self.query_one(Tabs).can_focus = False  # keys switch panels; the table keeps the cursor
+        self._overview.add_columns(*["" for _ in range(layout.VALUE_COLUMNS + 3)])
         self._event_table.add_columns("", "", "", "")
         self._show_active()
         self.run_worker(self.core.run(), group="core")
@@ -126,8 +127,7 @@ class FlyMonitorApp(App):
         fixed = layout.WIDTHS["name"] + sum(layout.WIDTHS["value"]) + layout.WIDTHS["note"] + 2 * (layout.VALUE_COLUMNS + 3)
         self._view.title_width = max(20, self.size.width - fixed)
         plugins = {p.name: p for p in self.core.list_plugins()}
-        table.clear(columns=True)  # widths only ever grow otherwise, so fit them to this panel again
-        table.add_columns(*["" for _ in range(layout.VALUE_COLUMNS + 3)])
+        table.clear()
         self._urls, self._rows = {}, {}
         shown = layout.sources_in(self._panel(), state)
         if not state.sources:
@@ -142,6 +142,11 @@ class FlyMonitorApp(App):
                 self._rows[row.key] = ("health" if row.kind in ("health", "source") else row.kind, row.source_id, row.ref)
             elif row.source_id:
                 self._rows[row.key] = (row.kind, row.source_id, "")
+
+        # clear() keeps column widths, so they only ever grew. Fit them to these rows now, not on idle:
+        # rows drawn before Textual's idle update would be cached at the old widths.
+        for column in table.columns.values():
+            column.content_width = max((Text(c).cell_len if isinstance(c, str) else c.cell_len for c in table.get_column(column.key)), default=0)
 
         if selected is not None:
             try:
