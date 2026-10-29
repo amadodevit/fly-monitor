@@ -18,9 +18,9 @@ from textual.suggester import SuggestFromList
 from textual.widgets import Button, Input, Label, OptionList, SelectionList, Static
 from textual.widgets.selection_list import Selection
 
-from fly_monitor.core.engine import Core
-from fly_monitor.core.panels import Panel, is_all, panel_matches
-from fly_monitor.ui.forms import DIALOG_CSS
+from watchkeep.core.engine import Core
+from watchkeep.core.panels import Panel, is_all, panel_matches
+from watchkeep.ui.forms import DIALOG_CSS
 
 # PanelFilter field -> label in the form
 RULES = (("clients", "Client is"), ("environments", "Environment is"), ("tags", "Tag is"), ("plugins", "Type is"))

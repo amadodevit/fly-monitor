@@ -15,7 +15,7 @@ class SilentDesktop:
 @pytest.fixture(autouse=True)
 def no_desktop_popups(monkeypatch):
     # Core() defaults to the real DesktopChannel; tests must never pop up on the developer's desktop.
-    monkeypatch.setattr("fly_monitor.core.engine.DesktopChannel", SilentDesktop)
+    monkeypatch.setattr("watchkeep.core.engine.DesktopChannel", SilentDesktop)
 
 
 class FakeKeyring:
@@ -52,5 +52,5 @@ class FakeKeyring:
 @pytest.fixture(autouse=True)
 def fake_keyring(monkeypatch):
     fake = FakeKeyring()
-    monkeypatch.setattr("fly_monitor.core.store.keyring", fake)
+    monkeypatch.setattr("watchkeep.core.store.keyring", fake)
     return fake

@@ -1,18 +1,18 @@
-# Writing a fly-monitor plugin
+# Writing a watchkeep plugin
 
 A plugin is a Python class that says what it needs and reports what is true right now.
 The core does everything else: scheduling, storage, history, health, notifications and the UI.
 
-The quickest start is to copy [`examples/fly-monitor-disk`](examples/fly-monitor-disk) and rename it.
+The quickest start is to copy [`examples/watchkeep-disk`](examples/watchkeep-disk) and rename it.
 
-> **Stability.** fly-monitor is 0.x. The contract may change between minor versions.
+> **Stability.** watchkeep is 0.x. The contract may change between minor versions.
 > Every change is listed in [CHANGELOG.md](CHANGELOG.md) under **Plugins**.
 
 ## A minimal plugin
 
 ```python
-from fly_monitor.core.models import Item
-from fly_monitor.core.plugin import Setting, SyncContext
+from watchkeep.core.models import Item
+from watchkeep.core.plugin import Setting, SyncContext
 
 
 class TodoSource:
@@ -32,11 +32,11 @@ class TodoSource:
 Register it in your package's `pyproject.toml`:
 
 ```toml
-[project.entry-points."fly_monitor.sources"]
-todo = "fly_monitor_todo:TodoSource"
+[project.entry-points."watchkeep.sources"]
+todo = "watchkeep_todo:TodoSource"
 ```
 
-Install your package next to fly-monitor and it appears under `a` (add source).
+Install your package next to watchkeep and it appears under `a` (add source).
 
 ## Settings become the form
 
@@ -75,8 +75,8 @@ If your samples carry numbers, declare them and let users write rules on them.
 You report the numbers; the core decides when they are bad.
 
 ```python
-from fly_monitor.core.checks import Check, Condition
-from fly_monitor.core.plugin import Metric
+from watchkeep.core.checks import Check, Condition
+from watchkeep.core.plugin import Metric
 
 metrics = (
     Metric("size", "Messages waiting"),
@@ -95,7 +95,7 @@ default_checks = (
 - Users see your default checks in the add-source form, can untick them and change the numbers.
   They double as examples, so make them sensible.
 
-See `src/fly_monitor/plugins/activemq.py` for a complete example.
+See `src/watchkeep/plugins/activemq.py` for a complete example.
 
 A failed check is a sample with `ok=False`, not an exception. Raise only when the plugin
 itself cannot run (bad token, unknown host). The core then shows the error on the source.
@@ -106,7 +106,7 @@ Add these when they help. The core checks for them with `hasattr`.
 
 | Member | What it does |
 |---|---|
-| `test_connection(ctx) -> str` | Powers the Test button and `fly-monitor check`. Return a short description, raise on failure. |
+| `test_connection(ctx) -> str` | Powers the Test button and `watchkeep check`. Return a short description, raise on failure. |
 | `detect() -> list[Candidate]` | Finds sources on this machine (e.g. a logged-in CLI). The wizard shows them first. Return `[]` when nothing is found. |
 | `identity` | Setting keys that identify a source, e.g. `("account",)`. Marks detected candidates that are already added. |
 | `title` | Name of your kind in the overview, e.g. "ActiveMQ queues". Default: `name`. |
@@ -171,5 +171,5 @@ See `tests/test_website.py` and `tests/test_example_plugin.py` for more.
 
 ## Publishing
 
-Name the package `fly-monitor-<name>` so people can find it, and say which fly-monitor
+Name the package `watchkeep-<name>` so people can find it, and say which watchkeep
 versions you tested with. Want it built in? Open an issue first, so we can agree on scope.

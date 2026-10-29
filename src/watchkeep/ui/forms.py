@@ -20,10 +20,10 @@ from textual.widgets import Button, Checkbox, Collapsible, Input, Label, OptionL
 from textual.widgets.option_list import Option
 from textual.widgets.selection_list import Selection
 
-from fly_monitor.core.checks import Check
-from fly_monitor.core.config import parse_interval
-from fly_monitor.core.engine import Core, DetectedSource, PluginInfo
-from fly_monitor.core.health import Rule
+from watchkeep.core.checks import Check
+from watchkeep.core.config import parse_interval
+from watchkeep.core.engine import Core, DetectedSource, PluginInfo
+from watchkeep.core.health import Rule
 
 DIALOG_CSS = """
 #dialog {

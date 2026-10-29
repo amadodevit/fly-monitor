@@ -1,4 +1,4 @@
-"""Example fly-monitor plugin: is any disk getting full?
+"""Example watchkeep plugin: is any disk getting full?
 
 A samples source: one row per path, checked every 5 minutes. The plugin only
 says whether each check passed; the core decides when that means "failing".
@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import shutil
 
-from fly_monitor.core.health import Rule
-from fly_monitor.core.models import Sample
-from fly_monitor.core.plugin import Setting, SyncContext
+from watchkeep.core.health import Rule
+from watchkeep.core.models import Sample
+from watchkeep.core.plugin import Setting, SyncContext
 
 
 class DiskSource:

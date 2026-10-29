@@ -1,8 +1,8 @@
 import pytest
 
-from fly_monitor.core.connections import Unreachable
-from fly_monitor.core.plugin import SyncContext
-from fly_monitor.plugins.website import WebsiteSource, parse_codes
+from watchkeep.core.connections import Unreachable
+from watchkeep.core.plugin import SyncContext
+from watchkeep.plugins.website import WebsiteSource, parse_codes
 
 
 class FakeHttp:

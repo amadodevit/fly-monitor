@@ -4,6 +4,8 @@ Changes to the plugin contract are marked **Plugins**.
 
 ## 0.1.0 (unreleased)
 
+- Renamed from fly-monitor to watchkeep: package, `watchkeep` command, data in `~/.local/share/watchkeep`, keyring service `watchkeep`.
+- **Plugins:** the entry-point group is now `watchkeep.sources` and the contract imports from `watchkeep.core.plugin`. Breaking for plugins written against the unreleased fly-monitor name; nothing was published under it.
 - Terminal UI with sources grouped and collapsible.
 - GitHub source: review requests, comments and mentions, accounts detected through `gh`.
 - Website source: status code and response time, failing after 5 of the last 10 checks.

@@ -3,9 +3,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-from fly_monitor.core.plugin import SourcePlugin, SyncContext
-from fly_monitor.plugins import feeds
-from fly_monitor.plugins.feeds import FeedsSource, parse_feed, parse_urls
+from watchkeep.core.plugin import SourcePlugin, SyncContext
+from watchkeep.plugins import feeds
+from watchkeep.plugins.feeds import FeedsSource, parse_feed, parse_urls
 
 FIXTURES = Path(__file__).parent / "fixtures"
 RSS = (FIXTURES / "feed_rss.xml").read_bytes()

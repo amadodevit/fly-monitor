@@ -2,12 +2,12 @@ import asyncio
 
 import pytest
 
-from fly_monitor.core.engine import Core
-from fly_monitor.core.health import Rule
-from fly_monitor.core.models import Item, Sample
-from fly_monitor.core.notify import FAILING, NEW_ITEM, RECOVERED, DesktopChannel, Event
-from fly_monitor.core.plugin import Setting
-from fly_monitor.core.store import Store
+from watchkeep.core.engine import Core
+from watchkeep.core.health import Rule
+from watchkeep.core.models import Item, Sample
+from watchkeep.core.notify import FAILING, NEW_ITEM, RECOVERED, DesktopChannel, Event
+from watchkeep.core.plugin import Setting
+from watchkeep.core.store import Store
 
 
 def item(id_):

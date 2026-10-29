@@ -26,8 +26,8 @@ from email.utils import parsedate_to_datetime
 
 import httpx
 
-from fly_monitor.core.models import Item
-from fly_monitor.core.plugin import Setting, SyncContext
+from watchkeep.core.models import Item
+from watchkeep.core.plugin import Setting, SyncContext
 
 DEFAULT_MODEL = "claude-haiku-5-5"
 KEEP_DAYS = 30

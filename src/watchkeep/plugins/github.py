@@ -13,8 +13,8 @@ import shutil
 import subprocess
 from typing import Any
 
-from fly_monitor.core.models import Item
-from fly_monitor.core.plugin import Candidate, Choice, Setting, SyncContext
+from watchkeep.core.models import Item
+from watchkeep.core.plugin import Candidate, Choice, Setting, SyncContext
 
 API = "https://api.github.com"
 REVIEW_QUERY = "is:pr is:open review-requested:@me archived:false"

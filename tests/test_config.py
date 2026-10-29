@@ -1,6 +1,6 @@
 import pytest
 
-from fly_monitor.core.config import DEFAULT_INTERVAL, parse_config, parse_interval
+from watchkeep.core.config import DEFAULT_INTERVAL, parse_config, parse_interval
 
 
 def test_parse_interval():

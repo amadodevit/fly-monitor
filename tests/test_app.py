@@ -2,12 +2,12 @@ import asyncio
 
 from textual.widgets import DataTable
 
-from fly_monitor.core.engine import Core
-from fly_monitor.core.models import Item
-from fly_monitor.core.plugin import Setting
-from fly_monitor.core.store import Store
-from fly_monitor.ui.app import FlyMonitorApp
-from fly_monitor.ui.layout import depth_name
+from watchkeep.core.engine import Core
+from watchkeep.core.models import Item
+from watchkeep.core.plugin import Setting
+from watchkeep.core.store import Store
+from watchkeep.ui.app import WatchkeepApp
+from watchkeep.ui.layout import depth_name
 
 
 class ItemsPlugin:
@@ -28,7 +28,7 @@ def test_pressing_i_hides_the_selected_item():
     asyncio.run(core.sync_now(sid))
 
     async def run():
-        app = FlyMonitorApp(core)
+        app = WatchkeepApp(core)
         app.core.run = lambda: asyncio.sleep(3600)  # no background syncing in this test
         async with app.run_test(size=(120, 30)) as pilot:
             await pilot.pause(1.2)
@@ -52,7 +52,7 @@ def test_g_cycles_grouping_and_remembers_it():
     core.add_source("items", "Work", {"account": "me"}, client="Acme")
 
     async def run():
-        app = FlyMonitorApp(core)
+        app = WatchkeepApp(core)
         app.core.run = lambda: asyncio.sleep(3600)
         async with app.run_test(size=(160, 30)) as pilot:
             await pilot.pause(1.2)
@@ -73,7 +73,7 @@ def test_plus_and_minus_step_through_levels():
         asyncio.run(core.sync_now(sid))
 
     async def run():
-        app = FlyMonitorApp(core)
+        app = WatchkeepApp(core)
         app.core.run = lambda: asyncio.sleep(3600)
         async with app.run_test(size=(160, 30)) as pilot:
             await pilot.pause(1.2)
@@ -104,10 +104,10 @@ def test_level_names():
 
 from textual.widgets import Tabs  # noqa: E402
 
-from fly_monitor.core.notify import DesktopChannel  # noqa: E402
-from fly_monitor.core.panels import Panel, PanelFilter, all_panel  # noqa: E402
-from fly_monitor.ui import layout  # noqa: E402
-from fly_monitor.ui.forms import ConfirmScreen  # noqa: E402
+from watchkeep.core.notify import DesktopChannel  # noqa: E402
+from watchkeep.core.panels import Panel, PanelFilter, all_panel  # noqa: E402
+from watchkeep.ui import layout  # noqa: E402
+from watchkeep.ui.forms import ConfirmScreen  # noqa: E402
 
 
 class GrowingPlugin:
@@ -163,7 +163,7 @@ def tab_labels(app):
 
 def start(core, body, size=(160, 30)):
     async def run():
-        app = FlyMonitorApp(core)
+        app = WatchkeepApp(core)
         app.core.run = lambda: asyncio.sleep(3600)  # no background syncing in these tests
         async with app.run_test(size=size) as pilot:
             await pilot.pause(1.2)
@@ -307,8 +307,8 @@ def test_panel_capital_p_on_a_no_client_group_warns_and_makes_nothing():
 
 def test_notifications_tab_lists_events_newest_first_and_enter_opens_the_url(monkeypatch):
     opened = []
-    monkeypatch.setattr("fly_monitor.ui.app.shutil.which", lambda _: None)
-    monkeypatch.setattr("fly_monitor.ui.app.webbrowser.open", opened.append)
+    monkeypatch.setattr("watchkeep.ui.app.shutil.which", lambda _: None)
+    monkeypatch.setattr("watchkeep.ui.app.webbrowser.open", opened.append)
     core = quiet_core(items=GrowingPlugin())
     sid = core.add_source("items", "Work", {"account": "a"})
     for _ in range(3):  # quiet first sync, then PR 2, then PR 3

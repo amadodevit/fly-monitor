@@ -3,8 +3,8 @@ import stat
 
 import pytest
 
-from fly_monitor.core.config import SourceConfig
-from fly_monitor.core.store import Store
+from watchkeep.core.config import SourceConfig
+from watchkeep.core.store import Store
 
 
 def test_secrets_go_to_the_keyring_not_the_database(fake_keyring):
@@ -12,7 +12,7 @@ def test_secrets_go_to_the_keyring_not_the_database(fake_keyring):
     store.add_source(SourceConfig(id="s", plugin="p", name="S", settings={"account": "me", "token": "t0k"}), {"token"})
     (raw,) = store._db.execute("SELECT settings FROM sources").fetchone()
     assert json.loads(raw) == {"account": "me"}
-    assert fake_keyring.entries == {("fly-monitor", "s/token"): "t0k"}
+    assert fake_keyring.entries == {("watchkeep", "s/token"): "t0k"}
     assert store.secrets.get_all("s") == {"token": "t0k"}
     [loaded] = store.list_sources()
     assert loaded.settings == {"account": "me"}  # not read until sync
@@ -59,7 +59,7 @@ def test_migration_moves_secrets_out_of_the_file(tmp_path, fake_keyring):
     store = legacy_store(tmp_path)
     assert store.migrate_secrets() == (2, 0)
     assert store._db.execute("SELECT COUNT(*) FROM source_secrets").fetchone() == (0,)
-    assert fake_keyring.entries == {("fly-monitor", "s/token"): "plain-t0k"}
+    assert fake_keyring.entries == {("watchkeep", "s/token"): "plain-t0k"}
     assert store.list_sources()[0].settings == {"account": "me", "backup": "env:BACKUP"}
     store.close()
     assert b"plain-t0k" not in (tmp_path / "state.db").read_bytes()  # vacuumed, not just deleted

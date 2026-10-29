@@ -13,10 +13,10 @@ import re
 from typing import Any
 from urllib.parse import quote
 
-from fly_monitor.core.checks import Check, Condition
-from fly_monitor.core.health import Rule
-from fly_monitor.core.models import Sample
-from fly_monitor.core.plugin import Metric, Setting, SyncContext
+from watchkeep.core.checks import Check, Condition
+from watchkeep.core.health import Rule
+from watchkeep.core.models import Sample
+from watchkeep.core.plugin import Metric, Setting, SyncContext
 
 QUEUES = "org.apache.activemq:type=Broker,brokerName=*,destinationType=Queue,destinationName=*"
 BROKERS = "org.apache.activemq:type=Broker,brokerName=*"

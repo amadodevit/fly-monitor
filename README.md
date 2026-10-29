@@ -1,4 +1,4 @@
-# fly-monitor
+# watchkeep
 
 One terminal view of the things you'd otherwise check in five browser tabs: GitHub review
 requests and mentions, website uptime, ActiveMQ Classic queues, and blog posts a Claude model
@@ -40,15 +40,15 @@ that has an API (see [Writing a plugin](#writing-a-plugin)).
 ## Run it
 
 ```sh
-uv run fly-monitor         # a add · e edit · g group · -/+ fold/unfold a level · d delete · Enter open/fold · r sync · i ignore · k acknowledge · c close · p panels · q quit
-uv run fly-monitor check   # test each source's connection
+uv run watchkeep         # a add · e edit · g group · -/+ fold/unfold a level · d delete · Enter open/fold · r sync · i ignore · k acknowledge · c close · p panels · q quit
+uv run watchkeep check   # test each source's connection
 uv run pytest
 ```
 
 ## How it works
 
-Sources live in `~/.local/share/fly-monitor/state.db` (owner-only). An existing
-`~/.config/fly-monitor/config.toml` is imported once on first run (see `config.example.toml`).
+Sources live in `~/.local/share/watchkeep/state.db` (owner-only). An existing
+`~/.config/watchkeep/config.toml` is imported once on first run (see `config.example.toml`).
 
 Secrets typed into the form go to your OS keyring (GNOME Keyring, KWallet, macOS Keychain,
 Windows Credential Manager), never into that database. Without a keyring, for example over SSH,
@@ -62,7 +62,7 @@ but none dequeued since the last sync) or a backlog. You can untick them and cha
 adding the broker. By default a queue is failing after 3 bad checks in a row, synced every minute.
 
 New GitHub items, and websites or queues going failing or recovering, raise a desktop popup (notify-send) and an in-app toast,
-while fly-monitor is open. A source's first sync stays quiet. A source's header turns red while one of its
+while watchkeep is open. A source's first sync stays quiet. A source's header turns red while one of its
 rows is failing, even when folded, and failing rows are listed first.
 
 Give each source a client and an environment (`e` to edit). The overview groups by client, then kind;
@@ -71,7 +71,7 @@ press `g` for kind only, environment, or a flat list. Healthy sources take one l
 ## Writing a plugin
 
 Want to monitor something else? Write a plugin: see [PLUGINS.md](PLUGINS.md) and the
-example in [`examples/fly-monitor-disk`](examples/fly-monitor-disk).
+example in [`examples/watchkeep-disk`](examples/watchkeep-disk).
 
 ## Panels
 

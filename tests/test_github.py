@@ -1,8 +1,8 @@
 import json
 from pathlib import Path
 
-from fly_monitor.core.plugin import SyncContext
-from fly_monitor.plugins.github import GitHubSource, api_to_html, parse_notification, parse_review_search
+from watchkeep.core.plugin import SyncContext
+from watchkeep.plugins.github import GitHubSource, api_to_html, parse_notification, parse_review_search
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -93,7 +93,7 @@ def test_missing_watch_means_everything():
 
 
 def test_parse_gh_hosts_keeps_working_github_com_logins():
-    from fly_monitor.plugins.github import parse_gh_hosts
+    from watchkeep.plugins.github import parse_gh_hosts
 
     found = parse_gh_hosts(load("gh_auth_status.json"))
     assert [c.name for c in found] == ["octo-work", "octo-home"]
@@ -115,7 +115,7 @@ def test_failed_state_lookup_keeps_the_row():
 
 
 def test_subject_without_state_is_kept():
-    from fly_monitor.plugins.github import _is_closed
+    from watchkeep.plugins.github import _is_closed
 
     thread = {"subject": {"url": "https://api.github.com/repos/a/b/releases/1"}}
     http = FakeHttp({})

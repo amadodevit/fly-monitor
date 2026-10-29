@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from fly_monitor.core.models import SourceView
-from fly_monitor.core.panels import (
+from watchkeep.core.models import SourceView
+from watchkeep.core.panels import (
     ALL_ID,
     VERSION,
     Panel,

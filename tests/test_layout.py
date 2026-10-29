@@ -1,10 +1,10 @@
 import time
 
-from fly_monitor.core.engine import PluginInfo
-from fly_monitor.core.models import HealthView, Item, ItemView, SourceView, State
-from fly_monitor.core.panels import Panel, PanelFilter, all_panel
-from fly_monitor.core.plugin import Metric
-from fly_monitor.ui.layout import PRESETS, View, build, empty_message, filter_from_group, sources_in, tab_failing_count
+from watchkeep.core.engine import PluginInfo
+from watchkeep.core.models import HealthView, Item, ItemView, SourceView, State
+from watchkeep.core.panels import Panel, PanelFilter, all_panel
+from watchkeep.core.plugin import Metric
+from watchkeep.ui.layout import PRESETS, View, build, empty_message, filter_from_group, sources_in, tab_failing_count
 
 NOW = 1_000_000.0
 QUEUE_METRICS = (

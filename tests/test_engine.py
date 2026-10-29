@@ -2,15 +2,15 @@ import asyncio
 
 import pytest
 
-from fly_monitor.core.checks import Check, Condition
-from fly_monitor.core.config import SourceConfig
-from fly_monitor.core.engine import ERROR_RETRY, Core
-from fly_monitor.core.health import Rule
-from fly_monitor.core.models import Item, Sample
-from fly_monitor.core.panels import ALL_ID, Panel, PanelFilter, all_panel
-from fly_monitor.core.plugin import Candidate, Choice, Metric, Setting
-from fly_monitor.core.registry import discover
-from fly_monitor.core.store import Store
+from watchkeep.core.checks import Check, Condition
+from watchkeep.core.config import SourceConfig
+from watchkeep.core.engine import ERROR_RETRY, Core
+from watchkeep.core.health import Rule
+from watchkeep.core.models import Item, Sample
+from watchkeep.core.panels import ALL_ID, Panel, PanelFilter, all_panel
+from watchkeep.core.plugin import Candidate, Choice, Metric, Setting
+from watchkeep.core.registry import discover
+from watchkeep.core.store import Store
 
 
 def item(id_):
@@ -381,14 +381,14 @@ def test_edit_keeps_history_and_applies_from_next_sync(fake_keyring):
     assert view.name == "Prod broker" and view.interval == 120
     assert view.health[0].failures == 1  # history kept; the new threshold no longer fires
     assert core._all[sid].settings == {"url": "http://b", "queues": "orders"}
-    assert fake_keyring.entries == {("fly-monitor", f"{sid}/password"): "pw1"}  # empty kept it
+    assert fake_keyring.entries == {("watchkeep", f"{sid}/password"): "pw1"}  # empty kept it
 
 
 def test_edit_replaces_or_releases_secrets_and_refuses_identity(fake_keyring):
     core = Core({"queues": BrokerPlugin()}, Store(":memory:"))
     sid = core.add_source("queues", "Broker", {"url": "http://b", "password": "pw1"})
     core.update_source(sid, name="Broker", settings={"password": "pw2"}, interval=60)
-    assert fake_keyring.entries == {("fly-monitor", f"{sid}/password"): "pw2"}
+    assert fake_keyring.entries == {("watchkeep", f"{sid}/password"): "pw2"}
     core.update_source(sid, name="Broker", settings={"password": "env:BROKER_PW"}, interval=60)
     assert fake_keyring.entries == {} and core._all[sid].settings["password"] == "env:BROKER_PW"
     with pytest.raises(ValueError, match="url can't change"):

@@ -1,6 +1,6 @@
 import pytest
 
-from fly_monitor.core.health import FAILING, OK, Rule, step
+from watchkeep.core.health import FAILING, OK, Rule, step
 
 RULE = Rule(window=10, fail_after=5, recover_after=3)
 

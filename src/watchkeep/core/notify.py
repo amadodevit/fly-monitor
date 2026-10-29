@@ -49,7 +49,7 @@ class DesktopChannel:
             body = "\n".join(f"• {e.body}" for e in events[:5]) + ("\n…" if len(events) > 5 else "")
         try:
             self._run(
-                ["notify-send", "--app-name=fly-monitor", "-u", "critical" if urgent else "normal", title, body],
+                ["notify-send", "--app-name=watchkeep", "-u", "critical" if urgent else "normal", title, body],
                 capture_output=True,
                 timeout=5,
             )

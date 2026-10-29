@@ -20,7 +20,7 @@ from .health import Health
 from .models import Item, Sample
 
 SAMPLES_KEPT = 50  # per row; enough for any reasonable rule window
-KEYRING_SERVICE = "fly-monitor"
+KEYRING_SERVICE = "watchkeep"
 # Backends that "work" but keep secrets in a plain file, or not at all.
 INSECURE_BACKENDS = ("keyrings.alt", "keyring.backends.fail", "keyring.backends.null")
 

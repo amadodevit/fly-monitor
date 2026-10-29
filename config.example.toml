@@ -1,4 +1,4 @@
-# Copy to ~/.config/fly-monitor/config.toml
+# Copy to ~/.config/watchkeep/config.toml
 # One [[source]] block per thing you watch. Each GitHub account is its own source.
 
 [[source]]

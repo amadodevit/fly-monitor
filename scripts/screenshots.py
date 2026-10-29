@@ -14,16 +14,16 @@ import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fly_monitor.core import engine
-from fly_monitor.core.engine import Core
-from fly_monitor.core.models import Item, Sample
-from fly_monitor.core.panels import Panel, PanelFilter
-from fly_monitor.core.store import Store
-from fly_monitor.plugins.activemq import ActiveMQSource
-from fly_monitor.plugins.feeds import FeedsSource
-from fly_monitor.plugins.github import GitHubSource
-from fly_monitor.plugins.website import WebsiteSource
-from fly_monitor.ui.app import FlyMonitorApp
+from watchkeep.core import engine
+from watchkeep.core.engine import Core
+from watchkeep.core.models import Item, Sample
+from watchkeep.core.panels import Panel, PanelFilter
+from watchkeep.core.store import Store
+from watchkeep.plugins.activemq import ActiveMQSource
+from watchkeep.plugins.feeds import FeedsSource
+from watchkeep.plugins.github import GitHubSource
+from watchkeep.plugins.website import WebsiteSource
+from watchkeep.ui.app import WatchkeepApp
 
 OUT = Path("docs/screenshots")
 SIZE = (180, 32)
@@ -115,7 +115,7 @@ def build() -> Core:
 
 
 async def shoot(core: Core, name: str, keys: tuple[str, ...] = (), wait: float = 1.5) -> None:
-    app = FlyMonitorApp(core)
+    app = WatchkeepApp(core)
     app.core.run = lambda: asyncio.sleep(3600)  # the data above is all there is
     async with app.run_test(size=SIZE) as pilot:
         await pilot.pause(wait)

@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from fly_monitor.core.connections import HttpConnection
+from watchkeep.core.connections import HttpConnection
 
 
 def connection(handler):

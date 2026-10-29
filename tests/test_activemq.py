@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from fly_monitor.core.plugin import SourcePlugin, SyncContext
-from fly_monitor.plugins.activemq import ActiveMQSource
+from watchkeep.core.plugin import SourcePlugin, SyncContext
+from watchkeep.plugins.activemq import ActiveMQSource
 
 FIXTURE = json.loads((Path(__file__).parent / "fixtures" / "activemq_queues.json").read_text())
 

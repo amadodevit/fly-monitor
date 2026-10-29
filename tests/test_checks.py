@@ -1,7 +1,7 @@
 import pytest
 
-from fly_monitor.core.checks import Check, Condition, fired, growth_summary, validate
-from fly_monitor.core.plugin import Metric
+from watchkeep.core.checks import Check, Condition, fired, growth_summary, validate
+from watchkeep.core.plugin import Metric
 
 METRICS = (Metric("size", "Size"), Metric("consumers", "Consumers"), Metric("dequeued", "Dequeued", counter=True))
 STUCK = Check("stuck", "Stuck", (Condition("size", ">", 0), Condition("dequeued", "=", 0)))

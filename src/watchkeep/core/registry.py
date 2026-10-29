@@ -2,7 +2,7 @@
 
 Any installed package can add a source by declaring, in its pyproject.toml:
 
-    [project.entry-points."fly_monitor.sources"]
+    [project.entry-points."watchkeep.sources"]
     myservice = "my_package.module:MyServiceSource"
 """
 
@@ -12,7 +12,7 @@ from importlib.metadata import entry_points
 
 from .plugin import SourcePlugin
 
-GROUP = "fly_monitor.sources"
+GROUP = "watchkeep.sources"
 
 
 def discover() -> dict[str, SourcePlugin]:

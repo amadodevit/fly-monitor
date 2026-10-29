@@ -6,10 +6,10 @@ plugin error. Whether failures add up to "failing" is the core's call.
 
 from __future__ import annotations
 
-from fly_monitor.core.connections import Unreachable
-from fly_monitor.core.health import Rule
-from fly_monitor.core.models import Sample
-from fly_monitor.core.plugin import Metric, Setting, SyncContext
+from watchkeep.core.connections import Unreachable
+from watchkeep.core.health import Rule
+from watchkeep.core.models import Sample
+from watchkeep.core.plugin import Metric, Setting, SyncContext
 
 
 class WebsiteSource:

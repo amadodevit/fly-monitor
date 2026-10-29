@@ -3,12 +3,12 @@ import asyncio
 from textual.app import App
 from textual.widgets import Button, Checkbox, Input, OptionList, SelectionList, Static
 
-from fly_monitor.core.checks import Check, Condition
-from fly_monitor.core.engine import Core
-from fly_monitor.core.health import Rule
-from fly_monitor.core.plugin import Candidate, Choice, Metric, Setting
-from fly_monitor.core.store import Store
-from fly_monitor.ui.forms import AddSourceScreen, EditSourceScreen
+from watchkeep.core.checks import Check, Condition
+from watchkeep.core.engine import Core
+from watchkeep.core.health import Rule
+from watchkeep.core.plugin import Candidate, Choice, Metric, Setting
+from watchkeep.core.store import Store
+from watchkeep.ui.forms import AddSourceScreen, EditSourceScreen
 
 
 class WebPlugin:
@@ -324,7 +324,7 @@ def test_edit_screen_is_prefilled_and_saves(fake_keyring):
     source = core._all[sid]
     assert source.checks[0]["conditions"] == [["size", ">", 10.0]]
     assert source.tags == ("prod",) and source.settings["queues"] == "orders, billing"
-    assert fake_keyring.entries == {("fly-monitor", f"{sid}/password"): "pw"}
+    assert fake_keyring.entries == {("watchkeep", f"{sid}/password"): "pw"}
 
 
 def test_edit_screen_escape_changes_nothing():
@@ -341,8 +341,8 @@ def test_edit_screen_escape_changes_nothing():
 
 # -- panel manager ---------------------------------------------------------------
 
-from fly_monitor.core.panels import Panel, PanelFilter, all_panel  # noqa: E402
-from fly_monitor.ui.panels import ListSuggester, PanelsScreen  # noqa: E402
+from watchkeep.core.panels import Panel, PanelFilter, all_panel  # noqa: E402
+from watchkeep.ui.panels import ListSuggester, PanelsScreen  # noqa: E402
 
 
 def panel_core():
@@ -563,12 +563,12 @@ def test_panel_manager_saves_only_through_core_and_escape_changes_nothing():
 def test_panel_manager_opens_from_the_app_with_p_and_updates_the_tabs():
     from textual.widgets import Tabs
 
-    from fly_monitor.ui.app import FlyMonitorApp
+    from watchkeep.ui.app import WatchkeepApp
 
     core, _ = panel_core()
 
     async def run():
-        app = FlyMonitorApp(core)
+        app = WatchkeepApp(core)
         app.core.run = lambda: asyncio.sleep(3600)
         async with app.run_test(size=(160, 60)) as pilot:
             await pilot.pause(1.2)

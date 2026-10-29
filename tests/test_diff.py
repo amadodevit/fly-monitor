@@ -1,5 +1,5 @@
-from fly_monitor.core.diff import diff_snapshot
-from fly_monitor.core.models import Item
+from watchkeep.core.diff import diff_snapshot
+from watchkeep.core.models import Item
 
 
 def item(id_, updated="2026-01-01T00:00:00Z"):

@@ -1,0 +1,19 @@
+[project]
+name = "watchkeep-disk"
+version = "0.1.0"
+description = "Example watchkeep plugin: disk usage per mount point."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = ["watchkeep"]
+
+# This line is what makes watchkeep find the plugin.
+[project.entry-points."watchkeep.sources"]
+disk = "watchkeep_disk:DiskSource"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/watchkeep_disk"]

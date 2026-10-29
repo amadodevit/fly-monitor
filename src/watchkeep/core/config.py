@@ -13,15 +13,15 @@ DEFAULT_INTERVAL = 3600  # 1h
 
 
 def config_path() -> Path:
-    if env := os.environ.get("FLY_MONITOR_CONFIG"):
+    if env := os.environ.get("WATCHKEEP_CONFIG"):
         return Path(env)
     base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    return base / "fly-monitor" / "config.toml"
+    return base / "watchkeep" / "config.toml"
 
 
 def data_path() -> Path:
     base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    return base / "fly-monitor" / "state.db"
+    return base / "watchkeep" / "state.db"
 
 
 @dataclass(frozen=True)

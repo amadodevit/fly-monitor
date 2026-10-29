@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 
-USER_AGENT = "fly-monitor/0.1"
+USER_AGENT = "watchkeep/0.1"
 
 
 class Unreachable(Exception):

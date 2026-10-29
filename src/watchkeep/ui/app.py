@@ -17,21 +17,21 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import DataTable, Footer, Header, Tab, Tabs
 
-from fly_monitor.core.engine import Core
-from fly_monitor.core.models import State
-from fly_monitor.core.notify import FAILING as FAILING_EVENT
-from fly_monitor.core.notify import RECOVERED, Event
-from fly_monitor.core.panels import Panel
-from fly_monitor.ui import layout
-from fly_monitor.ui.forms import AddSourceScreen, ConfirmScreen, EditSourceScreen
-from fly_monitor.ui.panels import PanelsScreen, new_panel_id
+from watchkeep.core.engine import Core
+from watchkeep.core.models import State
+from watchkeep.core.notify import FAILING as FAILING_EVENT
+from watchkeep.core.notify import RECOVERED, Event
+from watchkeep.core.panels import Panel
+from watchkeep.ui import layout
+from watchkeep.ui.forms import AddSourceScreen, ConfirmScreen, EditSourceScreen
+from watchkeep.ui.panels import PanelsScreen, new_panel_id
 
 NOTIFICATIONS = "tab-notifications"
 EVENT_LABELS = {FAILING_EVENT: Text("failing", style="bold red"), RECOVERED: Text("recovered", style="green")}
 
 
-class FlyMonitorApp(App):
-    TITLE = "fly-monitor"
+class WatchkeepApp(App):
+    TITLE = "watchkeep"
     CSS = "DataTable { height: 1fr; }"
     BINDINGS = [
         # Priority, or the screen's focus_next takes Tab first; check_action hands Tab back to forms.

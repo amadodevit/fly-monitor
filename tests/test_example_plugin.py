@@ -3,10 +3,10 @@
 import sys
 from pathlib import Path
 
-from fly_monitor.core.plugin import SourcePlugin, SyncContext
+from watchkeep.core.plugin import SourcePlugin, SyncContext
 
-sys.path.insert(0, str(Path(__file__).parents[1] / "examples" / "fly-monitor-disk" / "src"))
-from fly_monitor_disk import DiskSource, check  # noqa: E402
+sys.path.insert(0, str(Path(__file__).parents[1] / "examples" / "watchkeep-disk" / "src"))
+from watchkeep_disk import DiskSource, check  # noqa: E402
 
 
 def test_satisfies_the_contract():

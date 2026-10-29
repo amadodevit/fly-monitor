@@ -3,14 +3,14 @@ from __future__ import annotations
 import argparse
 import sys
 
-from fly_monitor.core.config import config_path, data_path, load_config
-from fly_monitor.core.engine import Core
-from fly_monitor.core.registry import discover
-from fly_monitor.core.store import Store
+from watchkeep.core.config import config_path, data_path, load_config
+from watchkeep.core.engine import Core
+from watchkeep.core.registry import discover
+from watchkeep.core.store import Store
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="fly-monitor")
+    parser = argparse.ArgumentParser(prog="watchkeep")
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("check", help="test each source's connection and exit")
     args = parser.parse_args(argv)
@@ -26,9 +26,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "check":
         return _check(core)
 
-    from fly_monitor.ui.app import FlyMonitorApp  # keep `check` fast and UI-free
+    from watchkeep.ui.app import WatchkeepApp  # keep `check` fast and UI-free
 
-    FlyMonitorApp(core, notice=notice).run()
+    WatchkeepApp(core, notice=notice).run()
     return 0
 
 
@@ -63,7 +63,7 @@ def _migrate_secrets(store: Store) -> str:
 def _check(core: Core) -> int:
     ids = core.source_ids()
     if not ids:
-        print("No sources yet. Run fly-monitor and press a to add one.")
+        print("No sources yet. Run watchkeep and press a to add one.")
         return 0
     failed = 0
     for source_id in ids:

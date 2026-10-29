@@ -18,11 +18,11 @@ from datetime import datetime
 
 from rich.text import Text
 
-from fly_monitor.core.checks import compact
-from fly_monitor.core.engine import PluginInfo
-from fly_monitor.core.health import FAILING
-from fly_monitor.core.models import HealthView, SourceView, State
-from fly_monitor.core.panels import Panel, PanelFilter, is_all, panel_matches
+from watchkeep.core.checks import compact
+from watchkeep.core.engine import PluginInfo
+from watchkeep.core.health import FAILING
+from watchkeep.core.models import HealthView, SourceView, State
+from watchkeep.core.panels import Panel, PanelFilter, is_all, panel_matches
 
 # (name shown on g, grouping levels outer to inner)
 PRESETS = (
