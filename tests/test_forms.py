@@ -582,4 +582,4 @@ def test_panel_manager_opens_from_the_app_with_p_and_updates_the_tabs():
             await pilot.pause(0.5)
             return [str(t.label) for t in app.query_one(Tabs).query("Tab")]
 
-    assert asyncio.run(run()) == ["1 All", "2 Personal", "Notifications"]
+    assert asyncio.run(run()) == ["1 All", "2 Personal", "Notifications", "Archive"]

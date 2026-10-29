@@ -183,7 +183,7 @@ def test_panel_first_run_shows_all_and_the_same_rows_as_before():
     labels, keys = start(core, body)
     plugins = {p.name: p for p in core.list_plugins()}
     expected = [r.key for r in layout.build(core.get_state(), plugins, layout.View(levels=layout.PRESETS[0][1], depth=2))]
-    assert [label.split()[-1] for label in labels] == ["All", "Notifications"]
+    assert [label.split()[-1] for label in labels] == ["All", "Notifications", "Archive"]
     assert keys == expected
 
 
@@ -207,7 +207,7 @@ def test_panel_number_keys_and_tab_switch_panels():
     assert seen[1] == ("p-personal", {home}, True)
     assert seen[2] == ("p-acme", {acme}, True)
     assert seen[3] == ("all", {acme, home}, True)
-    assert seen[4][2] is False  # shift+tab from the first tab wraps to Notifications, which hides the overview
+    assert seen[4][2] is False  # shift+tab from the first tab wraps to Archive, which hides the overview
 
 
 def test_panel_tab_labels_show_failing_counts():
@@ -287,7 +287,7 @@ def test_panel_capital_p_on_a_client_group_makes_a_panel():
     made = core.panels()[-1]
     assert (made.name, made.filter) == ("acme", PanelFilter(clients=("acme",)))
     assert core.active_panel() == made.id
-    assert labels[1] == "2 acme" and labels[-1].endswith("Notifications")
+    assert labels[1] == "2 acme" and labels[-2:] == ["Notifications", "Archive"]
     assert shown == {acme}
 
 
@@ -315,7 +315,7 @@ def test_notifications_tab_lists_events_newest_first_and_enter_opens_the_url(mon
         asyncio.run(core.sync_now(sid))
 
     async def body(app, pilot):
-        await pilot.press("shift+tab")  # from All, wraps to Notifications
+        await pilot.press("shift+tab", "shift+tab")  # from All, back past Archive to Notifications
         await pilot.pause(0.2)
         table = app.query_one("#notifications", DataTable)
         titles = [str(table.get_row_at(r)[2]) for r in range(table.row_count)]
@@ -365,3 +365,33 @@ def test_panel_tab_still_moves_focus_inside_a_form():
     before, after, active = start(core, body)
     assert after is not before
     assert active == "all"
+
+
+def test_m_marks_an_item_read_and_the_archive_tab_flips_it_back():
+    core = Core({"items": ItemsPlugin()}, Store(":memory:"))
+    sid = core.add_source("items", "Work", {"account": "me"})
+    asyncio.run(core.sync_now(sid))
+
+    async def run():
+        app = WatchkeepApp(core)
+        app.core.run = lambda: asyncio.sleep(3600)
+        async with app.run_test(size=(140, 30)) as pilot:
+            await pilot.pause(1.2)
+            table = app.query_one("#overview", DataTable)
+            table.move_cursor(row=table.get_row_index(f"{sid}\x1f2"))
+            await pilot.press("m")
+            await pilot.pause(1.2)
+            titles = [str(table.get_row_at(r)[1]) for r in range(table.row_count)]
+            await pilot.press("shift+tab")  # from All, wraps to Archive
+            await pilot.pause(0.5)
+            archive = app.query_one("#archive", DataTable)
+            read = {str(archive.get_row_at(r)[3]): str(archive.get_row_at(r)[1]) for r in range(archive.row_count)}
+            archive.move_cursor(row=archive.get_row_index(f"ar:{sid}\x1f2"))
+            await pilot.press("m")  # flips it back to unread
+            await pilot.pause(1.2)
+            return titles, read
+
+    titles, read = asyncio.run(run())
+    assert "PR 2" not in titles and "PR 1" in titles
+    assert read["PR 1"] == "unread" and read["PR 2"] != "unread"
+    assert [e.read_at for e in core.archive() if e.item.id == "2"] == [None]

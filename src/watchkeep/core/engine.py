@@ -23,7 +23,7 @@ from .config import DEFAULT_INTERVAL, SourceConfig
 from .connections import CONNECTIONS, resolve_secret
 from .diff import diff_snapshot
 from .health import FAILING, Health, Rule, step
-from .models import HealthView, Item, ItemView, Sample, SourceView, State
+from .models import ArchiveEntry, HealthView, Item, ItemView, Sample, SourceView, State
 from .notify import FAILING as FAILING_EVENT
 from .notify import NEW_ITEM, RECOVERED, DesktopChannel, Event
 from .panels import Panel
@@ -114,6 +114,35 @@ class Core:
         comes back (e.g. a review re-requested after you reviewed), it shows up as new."""
         self._store.ignore(source_id, item_id)
         self._bump()
+
+    def mark_read(self, source_id: str, item_id: str) -> None:
+        """Hide an item for good. Unlike ignore, this is remembered after the item leaves the
+        snapshot, so the archive shows it read and it stays hidden if the source reports it again."""
+        if not self._store.set_read(source_id, item_id, self._clock()):
+            raise ValueError("no such item")
+        self._bump()
+
+    def mark_unread(self, source_id: str, item_id: str) -> None:
+        """Undo mark_read: back in the overview if the source still reports it."""
+        if not self._store.set_read(source_id, item_id, None):
+            raise ValueError("no such item")
+        self._bump()
+
+    def archive(self) -> tuple[ArchiveEntry, ...]:
+        """Every item any items source has reported, read or not, newest first by first_seen."""
+        return tuple(
+            ArchiveEntry(
+                source_id=source_id,
+                source_name=source.name,
+                plugin=source.plugin,
+                item=item,
+                first_seen=first,
+                read_at=read_at,
+                present=present,
+            )
+            for source_id, item, first, read_at, present in self._store.history()
+            if (source := self._all.get(source_id)) is not None
+        )
 
     def acknowledge(self, source_id: str, key: str) -> None:
         health = self._health_of(source_id, key)
@@ -436,9 +465,11 @@ class Core:
         self._store.forget_ignored_except(source.id, set(kept))
         if first_sync:
             return []  # adding a source shouldn't announce everything it already had
+        read = self._store.read_items(source.id)  # back after leaving, but still read: it stays hidden, so no event
         return [
             self._event(NEW_ITEM, source, title=f"{source.name}: {item.action}", body=item.title, url=item.url)
             for item in diff.new
+            if item.id not in read
         ]
 
     def _apply_samples(
@@ -572,11 +603,12 @@ class Core:
             last_sync, last_error = self._store.source_state(source.id)
             snapshot = self._store.snapshot(source.id)
             ignored = self._store.ignored(source.id)
+            read = self._store.read_items(source.id) - ignored
             items = sorted(
                 (
                     ItemView(item=i, first_seen=first, is_new=first == last_sync)
                     for i, first in snapshot.values()
-                    if i.id not in ignored
+                    if i.id not in ignored and i.id not in read
                 ),
                 key=lambda v: v.item.updated_at,
                 reverse=True,
@@ -624,6 +656,7 @@ class Core:
                     items=tuple(items),
                     health=health_views,
                     ignored=len(ignored & snapshot.keys()),
+                    read=len(read & snapshot.keys()),
                     client=source.client,
                     environment=source.environment,
                 )

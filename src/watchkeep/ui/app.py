@@ -27,6 +27,7 @@ from watchkeep.ui.forms import AddSourceScreen, ConfirmScreen, EditSourceScreen
 from watchkeep.ui.panels import PanelsScreen, new_panel_id
 
 NOTIFICATIONS = "tab-notifications"
+ARCHIVE = "tab-archive"
 EVENT_LABELS = {FAILING_EVENT: Text("failing", style="bold red"), RECOVERED: Text("recovered", style="green")}
 
 
@@ -50,6 +51,7 @@ class WatchkeepApp(App):
         Binding("equals_sign", "unfold_level", "Unfold level", show=False),  # + without shift
         ("d", "delete", "Delete source"),
         ("i", "ignore", "Ignore"),
+        ("m", "mark_read", "Read"),
         ("k", "acknowledge", "Acknowledge"),
         ("c", "close", "Close"),
         ("q", "quit", "Quit"),
@@ -65,9 +67,10 @@ class WatchkeepApp(App):
         self._last_event = 0
         self._events: list[Event] = []  # this session's, oldest first; the core keeps the last 200
         self._event_urls: dict[str, str] = {}
+        self._archived: dict[str, tuple[str, str, str, bool]] = {}  # row key -> (source id, item id, url, read)
         self._panels: list[Panel] = core.panels()
         active = core.active_panel()
-        self._active = next((i for i, p in enumerate(self._panels) if p.id == active), 0)  # index, or -1 for Notifications
+        self._active = next((i for i, p in enumerate(self._panels) if p.id == active), 0)  # index, or -1 Notifications, -2 Archive
         levels = dict(layout.PRESETS).get(core.preference("grouping"), layout.PRESETS[0][1])
         self._view = layout.View(levels=levels, depth=len(levels))
 
@@ -76,12 +79,14 @@ class WatchkeepApp(App):
         yield Tabs(*self._tabs(), active=self._tab_id(self._active))
         yield DataTable(id="overview", cursor_type="row", show_header=False)
         yield DataTable(id="notifications", cursor_type="row", show_header=False)
+        yield DataTable(id="archive", cursor_type="row")
         yield Footer()
 
     def on_mount(self) -> None:
         self.query_one(Tabs).can_focus = False  # keys switch panels; the table keeps the cursor
         self._overview.add_columns(*["" for _ in range(layout.VALUE_COLUMNS + 3)])
         self._event_table.add_columns("", "", "", "")
+        self._archive_table.add_columns("arrived", "read", "source", "item", "")
         self._show_active()
         self.run_worker(self.core.run(), group="core")
         self.set_interval(1, self._poll)
@@ -102,6 +107,8 @@ class WatchkeepApp(App):
         state = self.core.get_state()
         if state.version != self._drawn_version:
             self._draw(state)
+            if self._active == -2:
+                self._draw_archive()
 
     def _redraw(self) -> None:
         self._draw(self.core.get_state())
@@ -113,6 +120,10 @@ class WatchkeepApp(App):
     @property
     def _event_table(self) -> DataTable:
         return self.query_one("#notifications", DataTable)
+
+    @property
+    def _archive_table(self) -> DataTable:
+        return self.query_one("#archive", DataTable)
 
     def _panel(self) -> Panel:
         return self._panels[self._active] if self._active >= 0 else self._panels[0]
@@ -158,11 +169,11 @@ class WatchkeepApp(App):
     # -- panels ----------------------------------------------------------------
 
     def _tab_id(self, index: int) -> str:
-        return NOTIFICATIONS if index < 0 else f"tab-{index}"
+        return {-1: NOTIFICATIONS, -2: ARCHIVE}.get(index, f"tab-{index}")
 
     def _tabs(self, state: State | None = None) -> list[Tab]:
         tabs = [Tab(self._tab_label(i, p, state), id=self._tab_id(i)) for i, p in enumerate(self._panels)]
-        return [*tabs, Tab("Notifications", id=NOTIFICATIONS)]
+        return [*tabs, Tab("Notifications", id=NOTIFICATIONS), Tab("Archive", id=ARCHIVE)]
 
     def _tab_label(self, index: int, panel: Panel, state: State | None) -> Text:
         label = Text(f"{index + 1} {panel.name}" if index < 9 else panel.name)
@@ -180,13 +191,16 @@ class WatchkeepApp(App):
                 pass  # tab is being rebuilt
 
     def _show_active(self) -> None:
-        on_notifications = self._active < 0
-        self._overview.display = not on_notifications
-        self._event_table.display = on_notifications
-        (self._event_table if on_notifications else self._overview).focus()
+        tables = {-1: self._event_table, -2: self._archive_table}
+        shown = tables.get(self._active, self._overview)
+        for table in (self._overview, *tables.values()):
+            table.display = table is shown
+        shown.focus()
+        if self._active == -2:
+            self._draw_archive()
 
     def _switch(self, index: int) -> None:
-        """Show panel `index` (-1 for Notifications) and remember it across restarts."""
+        """Show panel `index` (-1 Notifications, -2 Archive) and remember it across restarts."""
         self._active = index
         if index >= 0:
             self.core.set_active_panel(self._panels[index].id)
@@ -198,7 +212,7 @@ class WatchkeepApp(App):
 
     def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
         tab_id = event.tab.id or ""
-        index = -1 if tab_id == NOTIFICATIONS else int(tab_id.removeprefix("tab-"))
+        index = {NOTIFICATIONS: -1, ARCHIVE: -2}.get(tab_id) or int(tab_id.removeprefix("tab-"))
         if index != self._active:
             self._switch(index)
 
@@ -212,7 +226,7 @@ class WatchkeepApp(App):
             self._switch(index)
 
     def _step(self, by: int) -> None:
-        order = [*range(len(self._panels)), -1]  # Notifications last
+        order = [*range(len(self._panels)), -1, -2]  # Notifications, then Archive, last
         self._switch(order[(order.index(self._active) + by) % len(order)])
 
     def action_next_panel(self) -> None:
@@ -269,15 +283,46 @@ class WatchkeepApp(App):
             if event.url:
                 self._event_urls[key] = event.url
 
+    # -- archive ---------------------------------------------------------------
+
+    def _draw_archive(self) -> None:
+        """Every item that has come through an items source, newest first, read or not."""
+        table = self._archive_table
+        selected = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value if table.row_count else None
+        table.clear()
+        self._archived = {}
+        for entry in self.core.archive():
+            key = f"ar:{entry.source_id}\x1f{entry.item.id}"
+            read = Text(_when(entry.read_at), style="green") if entry.read_at else Text("unread", style="bold yellow")
+            title = Text(entry.item.title, style="" if entry.present else "dim")
+            gone = Text("" if entry.present else "gone from source", style="dim")
+            table.add_row(Text(_when(entry.first_seen), style="dim"), read, Text(entry.source_name, style="dim"), title, gone, key=key)
+            self._archived[key] = (entry.source_id, entry.item.id, entry.item.url, entry.read_at is not None)
+        if selected in self._archived:
+            table.move_cursor(row=table.get_row_index(selected))
+
+    def _selected_archived(self) -> tuple[str, str, str, bool] | None:
+        table = self._archive_table
+        if not table.row_count:
+            return None
+        return self._archived.get(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value or "")
+
     # -- rows ------------------------------------------------------------------
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        key = event.row_key.value or ""
         if event.data_table.id == "notifications":
-            self._browse(self._event_urls.get(event.row_key.value or ""))
-            return
-        self._open(event.row_key.value)
+            self._browse(self._event_urls.get(key))
+        elif event.data_table.id == "archive":
+            self._browse(self._archived[key][2] if key in self._archived else None)
+        else:
+            self._open(key)
 
     def action_open(self) -> None:
+        if self._active == -2:
+            row = self._selected_archived()
+            self._browse(row[2] if row else None)
+            return
         table = self._event_table if self._active < 0 else self._overview
         if not table.row_count:
             return
@@ -364,7 +409,7 @@ class WatchkeepApp(App):
     def _row_action(self, kind: str, action, done: str) -> None:
         row = self._selected_row()
         if row is None or row[0] != kind:
-            self.notify(f"Select a {'GitHub item' if kind == 'item' else 'check (queue or website)'} row first", severity="warning")
+            self.notify(f"Select {'an item (a post or GitHub item)' if kind == 'item' else 'a check (queue or website)'} row first", severity="warning")
             return
         try:
             action(row[1], row[2])
@@ -375,6 +420,17 @@ class WatchkeepApp(App):
 
     def action_ignore(self) -> None:
         self._row_action("item", self.core.ignore_item, "Ignored. Hidden until it's gone from the source")
+
+    def action_mark_read(self) -> None:
+        if self._active != -2:
+            self._row_action("item", self.core.mark_read, "Read. It's in the Archive tab")
+            return
+        row = self._selected_archived()  # in the archive, m flips read and unread
+        if row is None:
+            return
+        source_id, item_id, _, read = row
+        (self.core.mark_unread if read else self.core.mark_read)(source_id, item_id)
+        self.notify("Marked unread" if read else "Marked read", timeout=2)
 
     def action_acknowledge(self) -> None:
         self._row_action("health", self.core.acknowledge, "Acknowledged. Press c once it has recovered")
@@ -422,3 +478,9 @@ class WatchkeepApp(App):
     def action_sync(self) -> None:
         self.run_worker(self.core.sync_now(), group="sync")
         self.notify("Syncing all sources")
+
+
+def _when(at: float) -> str:
+    """14:05 today, else 'Oct 27 14:05'."""
+    moment = datetime.fromtimestamp(at)
+    return moment.strftime("%H:%M" if moment.date() == datetime.now().date() else "%b %d %H:%M")

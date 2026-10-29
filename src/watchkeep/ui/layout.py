@@ -310,6 +310,8 @@ def _item_counts(source: SourceView) -> Text:
     text = Text(f"{count} to look at" if count else "nothing needs you", style="" if count else "dim")
     if source.ignored:
         text.append(f" · {source.ignored} ignored", style="dim")
+    if source.read:
+        text.append(f" · {source.read} read", style="dim")
     return text
 
 

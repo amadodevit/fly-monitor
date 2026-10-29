@@ -124,3 +124,39 @@ def test_memory_round_trips_and_goes_with_the_source(tmp_path):
     store.replace_snapshot("s", {}, 4000.0, memory={"n": 1})
     store.remove_source("s")
     assert store.memory("s") == {}
+
+
+def test_databases_without_item_history_get_it_seeded_from_the_snapshot(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    db = sqlite3.connect(path)
+    db.execute("CREATE TABLE items (source_id TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL, first_seen REAL NOT NULL, PRIMARY KEY (source_id, item_id))")
+    shown = {"id": "a", "action": "new post", "title": "A", "url": "https://example.com/a", "repo": "", "author": "", "updated_at": "t"}
+    db.execute("INSERT INTO items VALUES ('s', 'a', ?, 500.0)", (json.dumps(shown),))
+    db.commit()
+    db.close()
+    store = Store(path)
+    [(source_id, item, first, read_at, present)] = store.history()
+    assert (source_id, item.id, first, read_at, present) == ("s", "a", 500.0, None, True)
+    store.close()
+    Store(path).close()  # a second start doesn't seed again or fail
+
+
+def test_history_keeps_items_after_they_leave_and_first_seen_on_update():
+    from watchkeep.core.models import Item
+
+    def it(title):
+        return Item(id="a", action="new", title=title, url="u", repo="", author="", updated_at=title)
+
+    store = Store(":memory:")
+    store.replace_snapshot("s", {"a": (it("v1"), 100.0)}, 100.0)
+    store.replace_snapshot("s", {"a": (it("v2"), 100.0)}, 200.0)
+    store.replace_snapshot("s", {}, 300.0)
+    store.replace_snapshot("s", {"a": (it("v3"), 400.0)}, 400.0)  # back: snapshot restarts first_seen, history doesn't
+    [(_, item, first, _, present)] = store.history()
+    assert (item.title, first, present) == ("v3", 100.0, True)
+    assert store.set_read("s", "a", 450.0) and store.read_items("s") == {"a"}
+    assert not store.set_read("s", "missing", 450.0)
+    store.remove_source("s")
+    assert store.history() == []

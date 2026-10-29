@@ -130,7 +130,7 @@ def main() -> None:
     asyncio.run(shoot(build(), "overview"))
     asyncio.run(shoot(build(), "panel", ("2", "down", "down", "enter")))  # the acme panel, broker unfolded
     asyncio.run(shoot(build(), "add-source", ("a", "enter")))  # the ActiveMQ form, checks included
-    asyncio.run(shoot(build(), "notifications", ("shift+tab",)))
+    asyncio.run(shoot(build(), "notifications", ("shift+tab", "shift+tab")))  # Archive is last, Notifications before it
     print(f"wrote {OUT}/*.svg")
 
 

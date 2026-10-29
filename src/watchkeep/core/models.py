@@ -80,9 +80,23 @@ class SourceView:
     items: tuple[ItemView, ...]
     health: tuple[HealthView, ...] = ()  # for sample-based sources
     ignored: int = 0  # items hidden by the user
+    read: int = 0  # items still reported but hidden because the user marked them read (not counted in `ignored`)
     client: str = ""
     environment: str = ""
     warnings: tuple[str, ...] = ()  # partial failures from the last successful sync, not an error
+
+
+@dataclass(frozen=True)
+class ArchiveEntry:
+    """One item from the history of an items source, read or not."""
+
+    source_id: str
+    source_name: str
+    plugin: str
+    item: Item  # as last reported
+    first_seen: float
+    read_at: float | None  # None while unread
+    present: bool  # still in the source's current snapshot
 
 
 @dataclass(frozen=True)

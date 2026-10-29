@@ -491,3 +491,61 @@ def test_stale_active_panel_falls_back_to_all():
     assert core.active_panel() == ALL_ID
     core.set_preference("active_panel", "garbage")
     assert core.active_panel() == ALL_ID
+
+
+def test_first_sync_and_later_syncs_go_to_the_archive(setup):
+    core, plugin, clock = setup
+    plugin.next = [item("a")]
+    asyncio.run(core.sync_now())  # baseline: quiet, but archived
+    clock.now += 700
+    plugin.next = [item("a"), item("b")]
+    asyncio.run(core.sync_now())
+    entries = core.archive()
+    assert [(e.item.id, e.first_seen) for e in entries] == [("b", 1700.0), ("a", 1000.0)]
+    assert all(e.present and e.read_at is None and e.source_name == "S1" and e.plugin == "fake" for e in entries)
+
+
+def test_read_hides_survives_leaving_and_unread_restores(setup):
+    core, plugin, clock = setup
+    plugin.next = [item("a"), item("b")]
+    asyncio.run(core.sync_now())
+    version = core.get_state().version
+    core.mark_read("s1", "a")
+    state = core.get_state()
+    assert state.version > version
+    assert set(items_of(core)) == {"b"} and state.sources[0].read == 1 and state.sources[0].ignored == 0
+
+    clock.now += 700
+    plugin.next = [item("b")]  # "a" leaves the snapshot
+    asyncio.run(core.sync_now())
+    [a] = [e for e in core.archive() if e.item.id == "a"]
+    assert a.read_at == 1000.0 and not a.present
+    assert core.get_state().sources[0].read == 0
+
+    clock.now += 700
+    plugin.next = [item("a"), item("b"), item("c")]  # "a" back, still read: hidden and no notification
+    asyncio.run(core.sync_now())
+    assert set(items_of(core)) == {"b", "c"}
+    assert [e.body for e in core.events_since(0)] == ["c"]
+
+    core.mark_unread("s1", "a")
+    assert set(items_of(core)) == {"a", "b", "c"}
+    [a] = [e for e in core.archive() if e.item.id == "a"]
+    assert a.read_at is None and a.present and a.first_seen == 1000.0
+
+
+def test_read_of_unknown_item_raises_and_remove_source_clears_archive(setup):
+    core, plugin, _ = setup
+    with pytest.raises(ValueError):
+        core.mark_read("s1", "nope")
+    with pytest.raises(ValueError):
+        core.mark_unread("other", "a")
+    plugin.next = [item("a")]
+    asyncio.run(core.sync_now())
+    core.mark_read("s1", "a")
+    core.remove_source("s1")
+    assert core.archive() == ()
+    core.add_source("fake", "S1", {"account": "me"}, source_id="s1")
+    plugin.next = [item("a")]
+    asyncio.run(core.sync_now())
+    assert set(items_of(core)) == {"a"}  # not read under a reused id

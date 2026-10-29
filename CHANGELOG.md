@@ -23,4 +23,5 @@ Changes to the plugin contract are marked **Plugins**.
 - Edit a source in place (`e`): everything but its identity (URL, account). History is kept.
 - **Plugins:** `Metric`, `Check`/`Condition` and `default_checks` for samples plugins; `Setting.fetch` with the `options(ctx, key)` hook.
 - **Plugins:** `SyncContext.memory` (per-source state the core keeps between successful syncs), `SyncContext.warnings` (partial failures shown on the source row) and `ctx.http.get` (raw response, for XML and conditional GETs). All additive: existing plugins need no change.
+- Read and archive for item sources (GitHub, feeds, any items plugin): mark an item read to hide it for good; the archive keeps every item ever reported, with when it appeared and when it was read, and can mark it unread. Kept in the core, so plugins need no change.
 - **Plugins:** first version of the contract, see [PLUGINS.md](PLUGINS.md).

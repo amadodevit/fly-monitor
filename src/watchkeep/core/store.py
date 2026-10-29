@@ -2,6 +2,10 @@
 
 Also each source's plugin memory (SyncContext.memory): plain JSON a plugin keeps
 between syncs, such as which posts it has already seen. Never secrets.
+
+And the item history: every item an items source has ever reported, kept after
+it leaves the snapshot, with when it was first seen and when the user marked it
+read. Read state lives here, not in the plugin, so any items plugin gets it.
 """
 
 from __future__ import annotations
@@ -80,6 +84,15 @@ CREATE TABLE IF NOT EXISTS health (
     key       TEXT NOT NULL,
     data      TEXT NOT NULL,
     PRIMARY KEY (source_id, key)
+);
+-- Every item ever reported, kept after it leaves `items`. read_at NULL means unread.
+CREATE TABLE IF NOT EXISTS item_history (
+    source_id  TEXT NOT NULL,
+    item_id    TEXT NOT NULL,
+    item       TEXT NOT NULL,  -- JSON of the latest Item
+    first_seen REAL NOT NULL,
+    read_at    REAL,
+    PRIMARY KEY (source_id, item_id)
 );
 CREATE TABLE IF NOT EXISTS ignored (
     source_id TEXT NOT NULL,
@@ -177,11 +190,16 @@ class Store:
         self._db = sqlite3.connect(path)
         if path != ":memory:":
             os.chmod(path, 0o600)  # holds secrets: owner-only
+        had_history = self._has_table("item_history")
         self._db.executescript(SCHEMA)
-        self._migrate()
+        self._migrate(had_history)
         self.secrets = SecretStore(self._db)
 
-    def _migrate(self) -> None:
+    def _has_table(self, name: str) -> bool:
+        row = self._db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)).fetchone()
+        return row is not None
+
+    def _migrate(self, had_history: bool = True) -> None:
         columns = {row[1] for row in self._db.execute("PRAGMA table_info(sources)")}
         if "rule" not in columns:  # databases from before sample-based sources
             self._db.execute("ALTER TABLE sources ADD COLUMN rule TEXT")
@@ -194,6 +212,12 @@ class Store:
         if "warnings" not in state_columns:  # databases from before sync warnings
             self._db.execute("ALTER TABLE source_state ADD COLUMN warnings TEXT")
         # source_memory is a new table, so SCHEMA's CREATE IF NOT EXISTS already added it.
+        if not had_history:  # databases from before the archive: start it from what is shown now
+            with self._db:
+                self._db.execute(
+                    "INSERT OR IGNORE INTO item_history (source_id, item_id, item, first_seen) "
+                    "SELECT source_id, item_id, data, first_seen FROM items"
+                )
 
     # -- sources ----------------------------------------------------------------
 
@@ -281,6 +305,7 @@ class Store:
                 ("samples", "source_id"),
                 ("health", "source_id"),
                 ("ignored", "source_id"),
+                ("item_history", "source_id"),
                 ("source_memory", "source_id"),
             ):
                 self._db.execute(f"DELETE FROM {table} WHERE {column} = ?", (source_id,))
@@ -368,6 +393,12 @@ class Store:
                 "INSERT INTO items (source_id, item_id, data, first_seen) VALUES (?, ?, ?, ?)",
                 [(source_id, i, json.dumps(item.to_dict()), first) for i, (item, first) in items.items()],
             )
+            # History keeps its own first_seen: an item that left and came back keeps the first one.
+            self._db.executemany(
+                "INSERT INTO item_history (source_id, item_id, item, first_seen) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(source_id, item_id) DO UPDATE SET item = excluded.item",
+                [(source_id, i, json.dumps(item.to_dict()), first) for i, (item, first) in items.items()],
+            )
             self._set_state(source_id, synced_at, None)
             self._save_sync_extras(source_id, memory, warnings)
 
@@ -452,6 +483,34 @@ class Store:
         with self._db:
             for item_id in self.ignored(source_id) - still_present:
                 self._db.execute("DELETE FROM ignored WHERE source_id = ? AND item_id = ?", (source_id, item_id))
+
+    # -- item history and read state -------------------------------------------
+
+    def read_items(self, source_id: str) -> set[str]:
+        rows = self._db.execute(
+            "SELECT item_id FROM item_history WHERE source_id = ? AND read_at IS NOT NULL", (source_id,)
+        )
+        return {item_id for (item_id,) in rows}
+
+    def set_read(self, source_id: str, item_id: str, read_at: float | None) -> bool:
+        """`read_at` None marks it unread. False when the item was never recorded."""
+        with self._db:
+            cursor = self._db.execute(
+                "UPDATE item_history SET read_at = ? WHERE source_id = ? AND item_id = ?", (read_at, source_id, item_id)
+            )
+        return cursor.rowcount > 0
+
+    def history(self) -> list[tuple[str, Item, float, float | None, bool]]:
+        """(source id, item, first seen, read at, still in the snapshot), newest first."""
+        rows = self._db.execute(
+            "SELECT h.source_id, h.item, h.first_seen, h.read_at, i.item_id IS NOT NULL "
+            "FROM item_history h LEFT JOIN items i ON i.source_id = h.source_id AND i.item_id = h.item_id "
+            "ORDER BY h.first_seen DESC, h.rowid DESC"
+        )
+        return [
+            (source_id, Item.from_dict(json.loads(data)), first, read_at, bool(present))
+            for source_id, data, first, read_at, present in rows
+        ]
 
     def record_error(self, source_id: str, error: str) -> None:
         last_sync, _ = self.source_state(source_id)

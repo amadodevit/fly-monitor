@@ -40,7 +40,7 @@ that has an API (see [Writing a plugin](#writing-a-plugin)).
 ## Run it
 
 ```sh
-uv run watchkeep         # a add · e edit · g group · -/+ fold/unfold a level · d delete · Enter open/fold · r sync · i ignore · k acknowledge · c close · p panels · q quit
+uv run watchkeep         # a add · e edit · g group · -/+ fold/unfold a level · d delete · Enter open/fold · r sync · i ignore · m mark read · k acknowledge · c close · p panels · q quit
 uv run watchkeep check   # test each source's connection
 uv run pytest
 ```
@@ -87,8 +87,11 @@ Values in one field are "any of"; different fields must all match, so client `ac
   panel you aren't looking at still shows.
 - A new source tagged `personal` turns up in a "Personal" panel by itself, no editing needed.
 - **All** is always first and can't be deleted. Deleting a panel never deletes a source.
-- **Notifications**, the last tab, lists this session's events, newest first. Enter opens one.
+- **Notifications** lists this session's events, newest first. Enter opens one.
   Toasts and popups still fire for every source, whichever panel is open.
+- **Archive**, the last tab, keeps every item (GitHub items, feed posts) with when it arrived and
+  when you read it. `m` on an item marks it read and hides it from the overview; `m` in the
+  Archive marks it unread again. Enter opens it.
 
 Panels and the last one you opened are kept across restarts.
 
