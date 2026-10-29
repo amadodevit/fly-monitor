@@ -1,12 +1,51 @@
 # fly-monitor
 
-Watch many sources from one terminal. Today: GitHub review requests, comments and mentions across several accounts, website uptime, and ActiveMQ Classic queues.
+One terminal view of the things you'd otherwise check in five browser tabs: GitHub review
+requests and mentions, website uptime, ActiveMQ Classic queues, and blog posts a Claude model
+picks out for you from your RSS/Atom feeds.
+
+It stays quiet while everything is fine. When something needs you, it goes red, moves to the
+top, and pops up a desktop notification.
+
+![Overview: one failing queue at the top, GitHub items, websites and feeds below](docs/screenshots/overview.png)
+
+*Everything at a glance, grouped by client. A queue lost its consumers, so the broker turned
+red. GitHub, the websites and the feeds wait below. (All data in these screenshots is made up.)*
+
+## What it does
+
+**Tells you what's wrong, not just that something is.** Each queue row shows messages waiting,
+consumers, and messages in and out since the last check. A queue fails on rules you choose
+(no consumers, stuck, backlog), and only after several bad checks in a row, so one blip
+doesn't wake you up.
+
+![The acme panel with the broker unfolded: orders.payments failing with no consumers](docs/screenshots/panel.png)
+
+*A panel per client. Here the Acme broker is unfolded: `orders.payments` has 64 messages
+waiting and nobody reading them. The tab shows `✗1` even when you're looking elsewhere.*
+
+**Keeps a log of what changed.** Every new review request, failing queue or recovery lands in
+the Notifications tab, with a desktop popup when it happens.
+
+![Notifications tab: a new review request and a failing queue](docs/screenshots/notifications.png)
+
+**Adding a source is a form, not a config file.** Pick a type, fill in the fields. For
+ActiveMQ, `Fetch` lists the broker's queues so you can choose. Passwords go to your OS keyring.
+
+![Add-source form for an ActiveMQ broker](docs/screenshots/add-source.png)
+
+**Grows with plugins.** Each source type is a small Python plugin. Write your own for anything
+that has an API (see [Writing a plugin](#writing-a-plugin)).
+
+## Run it
 
 ```sh
 uv run fly-monitor         # a add · e edit · g group · -/+ fold/unfold a level · d delete · Enter open/fold · r sync · i ignore · k acknowledge · c close · p panels · q quit
 uv run fly-monitor check   # test each source's connection
 uv run pytest
 ```
+
+## How it works
 
 Sources live in `~/.local/share/fly-monitor/state.db` (owner-only). An existing
 `~/.config/fly-monitor/config.toml` is imported once on first run (see `config.example.toml`).
@@ -28,6 +67,8 @@ rows is failing, even when folded, and failing rows are listed first.
 
 Give each source a client and an environment (`e` to edit). The overview groups by client, then kind;
 press `g` for kind only, environment, or a flat list. Healthy sources take one line.
+
+## Writing a plugin
 
 Want to monitor something else? Write a plugin: see [PLUGINS.md](PLUGINS.md) and the
 example in [`examples/fly-monitor-disk`](examples/fly-monitor-disk).
