@@ -171,7 +171,7 @@ def _source(rows: list[Row], source: SourceView, depth: int, ctx: _Ctx) -> None:
             item = view.item
             label = Text(inner)
             label.append("● " if view.is_new else "  ", style="bold yellow")
-            label.append(item.action, style="dim")
+            label.append(_cut(item.action, max(8, WIDTHS["name"] - len(inner) - 2)), style="dim")
             values = [Text(_cut(item.repo, WIDTHS["value"][0])), Text(_cut(item.author, WIDTHS["value"][1])), Text(_ago(_iso(item.updated_at), ctx))]
             cells = [label, Text(_cut(item.title, ctx.view.title_width)), *_pad(values), Text("")]
             rows.append(Row(f"{source.id}\x1f{item.id}", cells, "item", source.id, item.id, item.url))
