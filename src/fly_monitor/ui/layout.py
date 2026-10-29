@@ -33,7 +33,7 @@ PRESETS = (
 )
 VALUE_COLUMNS = 4
 ITEM_COLUMNS = ("repo", "by", "updated")
-WIDTHS = {"name": 26, "value": (20, 10, 8, 8), "note": 32}
+WIDTHS = {"name": 36, "value": (20, 10, 8, 8), "note": 32}
 UNSET = {"client": "No client", "environment": "No environment"}
 
 
